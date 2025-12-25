@@ -136,6 +136,87 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   const url = new URL(request.url);
   const action = url.searchParams.get("action");
 
+  // Initialize multipart upload
+  if (method === "POST" && action === "multipart-init") {
+    try {
+      const body = await request.json() as { contentType?: string };
+      const contentType = body.contentType || "application/octet-stream";
+      const uploadId = await s3Client.initiateMultipartUpload(path, contentType);
+      return Response.json({ uploadId });
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to initialize multipart upload" },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Upload part (streaming)
+  if (method === "PUT" && action === "multipart-upload") {
+    const uploadId = url.searchParams.get("uploadId");
+    const partNumber = parseInt(url.searchParams.get("partNumber") || "0", 10);
+
+    if (!uploadId || partNumber < 1) {
+      return Response.json({ error: "uploadId and partNumber are required" }, { status: 400 });
+    }
+
+    if (!request.body) {
+      return Response.json({ error: "No part body provided" }, { status: 400 });
+    }
+
+    try {
+      const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
+      const etag = await s3Client.uploadPart(path, uploadId, partNumber, request.body, contentLength);
+      return Response.json({ etag, partNumber });
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to upload part" },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Complete multipart upload
+  if (method === "POST" && action === "multipart-complete") {
+    try {
+      const body = await request.json() as {
+        uploadId?: string;
+        parts?: { partNumber: number; etag: string }[];
+      };
+
+      if (!body.uploadId || !body.parts || body.parts.length === 0) {
+        return Response.json({ error: "uploadId and parts are required" }, { status: 400 });
+      }
+
+      await s3Client.completeMultipartUpload(path, body.uploadId, body.parts);
+      return Response.json({ success: true, path });
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to complete multipart upload" },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Abort multipart upload
+  if (method === "POST" && action === "multipart-abort") {
+    try {
+      const body = await request.json() as { uploadId?: string };
+
+      if (!body.uploadId) {
+        return Response.json({ error: "uploadId is required" }, { status: 400 });
+      }
+
+      await s3Client.abortMultipartUpload(path, body.uploadId);
+      return Response.json({ success: true });
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to abort multipart upload" },
+        { status: 500 }
+      );
+    }
+  }
+
   // Create folder
   if (method === "POST" && action === "mkdir") {
     try {

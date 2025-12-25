@@ -445,4 +445,161 @@ export class S3Client {
       lastModified: response.headers.get("last-modified") || "",
     };
   }
+
+  async initiateMultipartUpload(key: string, contentType: string): Promise<string> {
+    const fullKey = this.getFullPath(key);
+    const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
+    const queryParams = { uploads: "" };
+
+    const headers = await this.signRequest("POST", path, queryParams, {
+      "Content-Type": contentType,
+    });
+
+    const response = await fetch(`${this.config.endpoint}${encodedPath}?uploads`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": contentType,
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`S3 InitiateMultipartUpload failed: ${response.status} ${text}`);
+    }
+
+    const xml = await response.text();
+    const uploadIdMatch = xml.match(/<UploadId>(.*?)<\/UploadId>/);
+    if (!uploadIdMatch) {
+      throw new Error("Failed to parse UploadId from response");
+    }
+
+    return uploadIdMatch[1];
+  }
+
+  async uploadPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    body: ReadableStream | ArrayBuffer,
+    contentLength?: number
+  ): Promise<string> {
+    const fullKey = this.getFullPath(key);
+    const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
+
+    // Query params must be sorted alphabetically for signature
+    const queryParams: Record<string, string> = {
+      partNumber: partNumber.toString(),
+      uploadId: uploadId,
+    };
+
+    const headers = await this.signRequest("PUT", path, queryParams, {}, "", true);
+
+    // Build query string in same sorted order as signature
+    const sortedKeys = Object.keys(queryParams).sort();
+    const queryString = sortedKeys
+      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+      .join("&");
+
+    const fetchHeaders: Record<string, string> = { ...headers };
+    if (contentLength !== undefined) {
+      fetchHeaders["Content-Length"] = contentLength.toString();
+    }
+
+    const response = await fetch(`${this.config.endpoint}${encodedPath}?${queryString}`, {
+      method: "PUT",
+      headers: fetchHeaders,
+      body,
+      // @ts-expect-error - duplex is required for streaming body
+      duplex: "half",
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`S3 UploadPart failed: ${response.status} ${text}`);
+    }
+
+    const etag = response.headers.get("ETag");
+    if (!etag) {
+      throw new Error("No ETag returned from UploadPart");
+    }
+
+    return etag.replace(/"/g, "");
+  }
+
+  async completeMultipartUpload(
+    key: string,
+    uploadId: string,
+    parts: { partNumber: number; etag: string }[]
+  ): Promise<void> {
+    const fullKey = this.getFullPath(key);
+    const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
+    const queryParams: Record<string, string> = { uploadId };
+
+    const partsXml = parts
+      .sort((a, b) => a.partNumber - b.partNumber)
+      .map(
+        (p) => `<Part><PartNumber>${p.partNumber}</PartNumber><ETag>"${p.etag}"</ETag></Part>`
+      )
+      .join("");
+    const body = `<CompleteMultipartUpload>${partsXml}</CompleteMultipartUpload>`;
+
+    const headers = await this.signRequest("POST", path, queryParams, {
+      "Content-Type": "application/xml",
+    }, body);
+
+    // Build query string in same sorted order as signature
+    const sortedKeys = Object.keys(queryParams).sort();
+    const queryString = sortedKeys
+      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+      .join("&");
+
+    const response = await fetch(
+      `${this.config.endpoint}${encodedPath}?${queryString}`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/xml",
+        },
+        body,
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`S3 CompleteMultipartUpload failed: ${response.status} ${text}`);
+    }
+  }
+
+  async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
+    const fullKey = this.getFullPath(key);
+    const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
+    const queryParams: Record<string, string> = { uploadId };
+
+    const headers = await this.signRequest("DELETE", path, queryParams);
+
+    // Build query string in same sorted order as signature
+    const sortedKeys = Object.keys(queryParams).sort();
+    const queryString = sortedKeys
+      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+      .join("&");
+
+    const response = await fetch(
+      `${this.config.endpoint}${encodedPath}?${queryString}`,
+      {
+        method: "DELETE",
+        headers,
+      }
+    );
+
+    if (!response.ok && response.status !== 204) {
+      const text = await response.text();
+      throw new Error(`S3 AbortMultipartUpload failed: ${response.status} ${text}`);
+    }
+  }
 }

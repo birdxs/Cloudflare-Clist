@@ -6,7 +6,11 @@
       "Bash(npm run build:*)",
       "Bash(npx wrangler d1 execute:*)",
       "Bash(npm run typecheck:workers:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(tree:*)",
+      "Bash(git -C \"D:\\\\Project\\\\WorkerProjects\\\\clist\" log --oneline -20)",
+      "Bash(git -C \"D:\\\\Project\\\\WorkerProjects\\\\clist\" show --stat 86f9684)",
+      "Bash(git -C \"D:\\\\Project\\\\WorkerProjects\\\\clist\" show --stat 7a480aa)"
     ]
   }
 }

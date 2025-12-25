@@ -17,10 +17,11 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const db = context.cloudflare.env.DB;
   const siteTitle = context.cloudflare.env.SITE_TITLE || "CList";
   const siteAnnouncement = context.cloudflare.env.SITE_ANNOUNCEMENT || "";
+  const chunkSizeMB = parseInt(context.cloudflare.env.CHUNK_SIZE_MB || "50", 10);
 
   if (!db) {
     console.error("D1 Database not bound");
-    return { isAdmin: false, storages: [], siteTitle, siteAnnouncement };
+    return { isAdmin: false, storages: [], siteTitle, siteAnnouncement, chunkSizeMB };
   }
 
   await initDatabase(db);
@@ -35,6 +36,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     isAdmin,
     siteTitle,
     siteAnnouncement,
+    chunkSizeMB,
     storages: storages.map((s) => ({
       id: s.id,
       name: s.name,
@@ -394,12 +396,12 @@ function AnnouncementModal({ announcement, onClose }: { announcement: string; on
   );
 }
 
-function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdmin: boolean; isDark: boolean }) {
+function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: StorageInfo; isAdmin: boolean; isDark: boolean; chunkSizeMB: number }) {
   const [path, setPath] = useState("");
   const [objects, setObjects] = useState<S3Object[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [uploadProgress, setUploadProgress] = useState<{ name: string; progress: number } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; progress: number; currentPart?: number; totalParts?: number } | null>(null);
   const [previewFile, setPreviewFile] = useState<S3Object | null>(null);
   const [showNewFolderInput, setShowNewFolderInput] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -555,39 +557,18 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    const CHUNK_SIZE = chunkSizeMB * 1024 * 1024;
+
     for (const file of Array.from(files)) {
       try {
         const uploadPath = path ? `${path}/${file.name}` : file.name;
 
-        await new Promise<void>((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-
-          xhr.upload.onprogress = (event) => {
-            if (event.lengthComputable) {
-              const percent = Math.round((event.loaded / event.total) * 100);
-              setUploadProgress({ name: file.name, progress: percent });
-            }
-          };
-
-          xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve();
-            } else {
-              try {
-                const data = JSON.parse(xhr.responseText);
-                reject(new Error(data.error || "上传失败"));
-              } catch {
-                reject(new Error("上传失败"));
-              }
-            }
-          };
-
-          xhr.onerror = () => reject(new Error("网络错误"));
-
-          xhr.open("PUT", `/api/files/${storage.id}/${uploadPath}`);
-          xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-          xhr.send(file);
-        });
+        // Use multipart upload for files larger than chunk size
+        if (file.size >= CHUNK_SIZE) {
+          await uploadMultipart(file, uploadPath, CHUNK_SIZE);
+        } else {
+          await uploadSingle(file, uploadPath);
+        }
       } catch (err) {
         alert(`上传 ${file.name} 失败: ${err instanceof Error ? err.message : "未知错误"}`);
       }
@@ -595,6 +576,210 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
     setUploadProgress(null);
     loadFiles();
     e.target.value = "";
+  };
+
+  const uploadSingle = async (file: File, uploadPath: string) => {
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          setUploadProgress({ name: file.name, progress: percent });
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            reject(new Error(data.error || "上传失败"));
+          } catch {
+            reject(new Error("上传失败"));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error("网络错误"));
+
+      xhr.open("PUT", `/api/files/${storage.id}/${uploadPath}`);
+      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      xhr.send(file);
+    });
+  };
+
+  const uploadMultipart = async (file: File, uploadPath: string, chunkSize: number) => {
+    const totalParts = Math.ceil(file.size / chunkSize);
+    const contentType = file.type || "application/octet-stream";
+
+    // Check for existing upload in localStorage (resume support)
+    const storageKey = `multipart_${storage.id}_${uploadPath}_${file.size}`;
+    const savedState = localStorage.getItem(storageKey);
+    let uploadId: string;
+    let completedParts: { partNumber: number; etag: string }[] = [];
+    let startPart = 0;
+
+    if (savedState) {
+      try {
+        const parsed = JSON.parse(savedState);
+        if (parsed.uploadId && parsed.parts && parsed.fileName === file.name) {
+          const shouldResume = confirm(`检测到未完成的上传 "${file.name}"，是否继续？\n已完成 ${parsed.parts.length}/${totalParts} 分片`);
+          if (shouldResume) {
+            uploadId = parsed.uploadId;
+            completedParts = parsed.parts;
+            startPart = completedParts.length;
+          } else {
+            // Abort old upload and start fresh
+            try {
+              await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-abort`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ uploadId: parsed.uploadId }),
+              });
+            } catch { /* ignore */ }
+            localStorage.removeItem(storageKey);
+          }
+        }
+      } catch { /* ignore invalid state */ }
+    }
+
+    // Initialize new upload if needed
+    if (!uploadId!) {
+      setUploadProgress({ name: file.name, progress: 0, currentPart: 0, totalParts });
+
+      const initRes = await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-init`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contentType }),
+      });
+
+      if (!initRes.ok) {
+        const data = await initRes.json() as { error?: string };
+        throw new Error(data.error || "初始化分片上传失败");
+      }
+
+      const initData = await initRes.json() as { uploadId: string };
+      uploadId = initData.uploadId;
+
+      // Save initial state
+      localStorage.setItem(storageKey, JSON.stringify({
+        uploadId,
+        fileName: file.name,
+        parts: [],
+      }));
+    }
+
+    // Calculate initial progress
+    const initialProgress = Math.round((startPart / totalParts) * 100);
+    setUploadProgress({ name: file.name, progress: initialProgress, currentPart: startPart, totalParts });
+
+    try {
+      // Upload remaining parts sequentially with progress
+      for (let i = startPart; i < totalParts; i++) {
+        const partNumber = i + 1;
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const chunk = file.slice(start, end);
+
+        const etag = await uploadPartWithProgress(
+          uploadPath,
+          uploadId,
+          partNumber,
+          chunk,
+          file.name,
+          i,
+          totalParts,
+          file.size
+        );
+
+        completedParts.push({ partNumber, etag });
+
+        // Save progress to localStorage
+        localStorage.setItem(storageKey, JSON.stringify({
+          uploadId,
+          fileName: file.name,
+          parts: completedParts,
+        }));
+
+        const progress = Math.round((completedParts.length / totalParts) * 100);
+        setUploadProgress({ name: file.name, progress, currentPart: completedParts.length, totalParts });
+      }
+
+      // Complete multipart upload
+      const completeRes = await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId, parts: completedParts }),
+      });
+
+      if (!completeRes.ok) {
+        const data = await completeRes.json() as { error?: string };
+        throw new Error(data.error || "完成分片上传失败");
+      }
+
+      // Clear saved state on success
+      localStorage.removeItem(storageKey);
+    } catch (err) {
+      // Don't abort on error - keep state for resume
+      // Just re-throw to show error to user
+      throw err;
+    }
+  };
+
+  const uploadPartWithProgress = (
+    uploadPath: string,
+    uploadId: string,
+    partNumber: number,
+    chunk: Blob,
+    fileName: string,
+    partIndex: number,
+    totalParts: number,
+    totalFileSize: number
+  ): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const chunkSize = chunk.size;
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          // Calculate overall progress
+          const completedBytes = partIndex * chunkSize + event.loaded;
+          const overallProgress = Math.round((completedBytes / totalFileSize) * 100);
+          setUploadProgress({
+            name: fileName,
+            progress: overallProgress,
+            currentPart: partIndex + 1,
+            totalParts,
+          });
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve(data.etag);
+          } catch {
+            reject(new Error("解析响应失败"));
+          }
+        } else {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            reject(new Error(data.error || `上传分片 ${partNumber} 失败`));
+          } catch {
+            reject(new Error(`上传分片 ${partNumber} 失败`));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error("网络错误"));
+
+      const url = `/api/files/${storage.id}/${uploadPath}?action=multipart-upload&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`;
+      xhr.open("PUT", url);
+      xhr.send(chunk);
+    });
   };
 
   const handleCreateFolder = async () => {
@@ -868,6 +1053,11 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-600 dark:text-zinc-400 font-mono truncate flex-1">
               正在上传: {uploadProgress.name}
+              {uploadProgress.totalParts && (
+                <span className="text-zinc-400 dark:text-zinc-500 ml-1">
+                  ({uploadProgress.currentPart}/{uploadProgress.totalParts} 分片)
+                </span>
+              )}
             </span>
             <span className="text-xs text-zinc-500 font-mono w-12 text-right">
               {uploadProgress.progress}%
@@ -1043,6 +1233,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
   const siteTitle = loaderData.siteTitle || "CList";
   const siteAnnouncement = loaderData.siteAnnouncement || "";
+  const chunkSizeMB = loaderData.chunkSizeMB || 50;
 
   useEffect(() => {
     const saved = localStorage.getItem("theme");
@@ -1258,7 +1449,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         {/* Main */}
         <main className="flex-1 bg-zinc-50 dark:bg-zinc-900 min-w-0 overflow-hidden">
           {selectedStorage ? (
-            <FileBrowser storage={selectedStorage} isAdmin={isAdmin} isDark={isDark} />
+            <FileBrowser storage={selectedStorage} isAdmin={isAdmin} isDark={isDark} chunkSizeMB={chunkSizeMB} />
           ) : (
             <div className="flex items-center justify-center h-full text-zinc-400 dark:text-zinc-600 font-mono text-sm">
               ← 选择存储以浏览文件
