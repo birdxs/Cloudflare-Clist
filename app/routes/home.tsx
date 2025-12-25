@@ -77,6 +77,14 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
+function formatSpeed(bytesPerSecond: number): string {
+  if (bytesPerSecond === 0) return "0 B/s";
+  const k = 1024;
+  const sizes = ["B/s", "KB/s", "MB/s", "GB/s"];
+  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
+  return parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return "-";
   const date = new Date(dateStr);
@@ -401,7 +409,15 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
   const [objects, setObjects] = useState<S3Object[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [uploadProgress, setUploadProgress] = useState<{ name: string; progress: number; currentPart?: number; totalParts?: number } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{
+    name: string;
+    progress: number;
+    currentPart?: number;
+    totalParts?: number;
+    speed?: number; // bytes per second
+    loaded?: number;
+    total?: number;
+  } | null>(null);
   const [previewFile, setPreviewFile] = useState<S3Object | null>(null);
   const [showNewFolderInput, setShowNewFolderInput] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -613,6 +629,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
   const uploadMultipart = async (file: File, uploadPath: string, chunkSize: number) => {
     const totalParts = Math.ceil(file.size / chunkSize);
     const contentType = file.type || "application/octet-stream";
+    const CONCURRENT_UPLOADS = 3;
 
     // Check for existing upload in localStorage (resume support)
     const storageKey = `multipart_${storage.id}_${uploadPath}_${file.size}`;
@@ -631,7 +648,6 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
             completedParts = parsed.parts;
             startPart = completedParts.length;
           } else {
-            // Abort old upload and start fresh
             try {
               await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-abort`, {
                 method: "POST",
@@ -647,7 +663,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
 
     // Initialize new upload if needed
     if (!uploadId!) {
-      setUploadProgress({ name: file.name, progress: 0, currentPart: 0, totalParts });
+      setUploadProgress({ name: file.name, progress: 0, currentPart: 0, totalParts, speed: 0, loaded: 0, total: file.size });
 
       const initRes = await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-init`, {
         method: "POST",
@@ -663,7 +679,6 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
       const initData = await initRes.json() as { uploadId: string };
       uploadId = initData.uploadId;
 
-      // Save initial state
       localStorage.setItem(storageKey, JSON.stringify({
         uploadId,
         fileName: file.name,
@@ -671,41 +686,112 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
       }));
     }
 
-    // Calculate initial progress
-    const initialProgress = Math.round((startPart / totalParts) * 100);
-    setUploadProgress({ name: file.name, progress: initialProgress, currentPart: startPart, totalParts });
+    // Speed calculation
+    let totalBytesUploaded = startPart * chunkSize;
+    const startTime = Date.now();
+    const partProgress: Record<number, number> = {};
+
+    const updateProgress = () => {
+      const currentBytes = totalBytesUploaded + Object.values(partProgress).reduce((a, b) => a + b, 0);
+      const elapsed = (Date.now() - startTime) / 1000;
+      const speed = elapsed > 0 ? currentBytes / elapsed : 0;
+      const progress = Math.round((currentBytes / file.size) * 100);
+
+      setUploadProgress({
+        name: file.name,
+        progress: Math.min(progress, 100),
+        currentPart: completedParts.length,
+        totalParts,
+        speed,
+        loaded: currentBytes,
+        total: file.size,
+      });
+    };
+
+    updateProgress();
 
     try {
-      // Upload remaining parts sequentially with progress
-      for (let i = startPart; i < totalParts; i++) {
-        const partNumber = i + 1;
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, file.size);
-        const chunk = file.slice(start, end);
-
-        const etag = await uploadPartWithProgress(
-          uploadPath,
-          uploadId,
+      // Build upload queue
+      const uploadQueue = Array.from({ length: totalParts - startPart }, (_, i) => {
+        const partNumber = startPart + i + 1;
+        return {
           partNumber,
-          chunk,
-          file.name,
-          i,
-          totalParts,
-          file.size
-        );
+          start: (partNumber - 1) * chunkSize,
+          end: Math.min(partNumber * chunkSize, file.size),
+        };
+      });
 
-        completedParts.push({ partNumber, etag });
+      // Upload part through Workers proxy with XHR for progress
+      const uploadPart = (item: { partNumber: number; start: number; end: number }): Promise<{ partNumber: number; etag: string }> => {
+        const chunk = file.slice(item.start, item.end);
 
-        // Save progress to localStorage
-        localStorage.setItem(storageKey, JSON.stringify({
-          uploadId,
-          fileName: file.name,
-          parts: completedParts,
-        }));
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
 
-        const progress = Math.round((completedParts.length / totalParts) * 100);
-        setUploadProgress({ name: file.name, progress, currentPart: completedParts.length, totalParts });
-      }
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              partProgress[item.partNumber] = event.loaded;
+              updateProgress();
+            }
+          };
+
+          xhr.onload = () => {
+            delete partProgress[item.partNumber];
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                totalBytesUploaded += chunk.size;
+                resolve({ partNumber: item.partNumber, etag: data.etag });
+              } catch {
+                reject(new Error(`解析响应失败: 分片 ${item.partNumber}`));
+              }
+            } else {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                reject(new Error(data.error || `上传分片 ${item.partNumber} 失败`));
+              } catch {
+                reject(new Error(`上传分片 ${item.partNumber} 失败: ${xhr.status}`));
+              }
+            }
+          };
+
+          xhr.onerror = () => {
+            delete partProgress[item.partNumber];
+            reject(new Error(`网络错误: 分片 ${item.partNumber}`));
+          };
+
+          const url = `/api/files/${storage.id}/${uploadPath}?action=multipart-upload&uploadId=${encodeURIComponent(uploadId)}&partNumber=${item.partNumber}`;
+          xhr.open("PUT", url);
+          xhr.send(chunk);
+        });
+      };
+
+      // Process queue with concurrency limit
+      let index = 0;
+
+      const runNext = async (): Promise<void> => {
+        while (index < uploadQueue.length) {
+          const currentIndex = index++;
+          const item = uploadQueue[currentIndex];
+          const result = await uploadPart(item);
+          completedParts.push(result);
+
+          localStorage.setItem(storageKey, JSON.stringify({
+            uploadId,
+            fileName: file.name,
+            parts: completedParts,
+          }));
+
+          updateProgress();
+        }
+      };
+
+      // Start concurrent uploads
+      const workers = Array(Math.min(CONCURRENT_UPLOADS, uploadQueue.length))
+        .fill(null)
+        .map(() => runNext());
+
+      await Promise.all(workers);
 
       // Complete multipart upload
       const completeRes = await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-complete`, {
@@ -719,67 +805,10 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
         throw new Error(data.error || "完成分片上传失败");
       }
 
-      // Clear saved state on success
       localStorage.removeItem(storageKey);
     } catch (err) {
-      // Don't abort on error - keep state for resume
-      // Just re-throw to show error to user
       throw err;
     }
-  };
-
-  const uploadPartWithProgress = (
-    uploadPath: string,
-    uploadId: string,
-    partNumber: number,
-    chunk: Blob,
-    fileName: string,
-    partIndex: number,
-    totalParts: number,
-    totalFileSize: number
-  ): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      const chunkSize = chunk.size;
-
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          // Calculate overall progress
-          const completedBytes = partIndex * chunkSize + event.loaded;
-          const overallProgress = Math.round((completedBytes / totalFileSize) * 100);
-          setUploadProgress({
-            name: fileName,
-            progress: overallProgress,
-            currentPart: partIndex + 1,
-            totalParts,
-          });
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            resolve(data.etag);
-          } catch {
-            reject(new Error("解析响应失败"));
-          }
-        } else {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            reject(new Error(data.error || `上传分片 ${partNumber} 失败`));
-          } catch {
-            reject(new Error(`上传分片 ${partNumber} 失败`));
-          }
-        }
-      };
-
-      xhr.onerror = () => reject(new Error("网络错误"));
-
-      const url = `/api/files/${storage.id}/${uploadPath}?action=multipart-upload&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`;
-      xhr.open("PUT", url);
-      xhr.send(chunk);
-    });
   };
 
   const handleCreateFolder = async () => {
@@ -1059,6 +1088,11 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
                 </span>
               )}
             </span>
+            {uploadProgress.speed !== undefined && uploadProgress.speed > 0 && (
+              <span className="text-xs text-blue-500 font-mono shrink-0">
+                {formatSpeed(uploadProgress.speed)}
+              </span>
+            )}
             <span className="text-xs text-zinc-500 font-mono w-12 text-right">
               {uploadProgress.progress}%
             </span>
@@ -1069,6 +1103,11 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
               style={{ width: `${uploadProgress.progress}%` }}
             />
           </div>
+          {uploadProgress.loaded !== undefined && uploadProgress.total !== undefined && (
+            <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500 font-mono">
+              {formatBytes(uploadProgress.loaded)} / {formatBytes(uploadProgress.total)}
+            </div>
+          )}
         </div>
       )}
 

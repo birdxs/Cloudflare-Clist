@@ -151,7 +151,33 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     }
   }
 
-  // Upload part (streaming)
+  // Get signed URLs for multipart upload parts (batch)
+  if (method === "POST" && action === "multipart-urls") {
+    try {
+      const body = await request.json() as {
+        uploadId?: string;
+        partNumbers?: number[];
+      };
+
+      if (!body.uploadId || !body.partNumbers || body.partNumbers.length === 0) {
+        return Response.json({ error: "uploadId and partNumbers are required" }, { status: 400 });
+      }
+
+      const urls: Record<number, string> = {};
+      for (const partNumber of body.partNumbers) {
+        urls[partNumber] = await s3Client.getSignedUploadPartUrl(path, body.uploadId, partNumber);
+      }
+
+      return Response.json({ urls });
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to generate signed URLs" },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Upload part (streaming) - kept as fallback
   if (method === "PUT" && action === "multipart-upload") {
     const uploadId = url.searchParams.get("uploadId");
     const partNumber = parseInt(url.searchParams.get("partNumber") || "0", 10);

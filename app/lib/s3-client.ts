@@ -367,6 +367,65 @@ export class S3Client {
     return `${this.config.endpoint}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
   }
 
+  async getSignedUploadPartUrl(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    expiresIn: number = 3600
+  ): Promise<string> {
+    const fullKey = this.getFullPath(key);
+    const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
+    const url = new URL(this.config.endpoint);
+    const host = url.host;
+
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+    const dateStamp = amzDate.slice(0, 8);
+    const credentialScope = `${dateStamp}/${this.config.region}/s3/aws4_request`;
+
+    const queryParams: Record<string, string> = {
+      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+      "X-Amz-Credential": `${this.config.accessKeyId}/${credentialScope}`,
+      "X-Amz-Date": amzDate,
+      "X-Amz-Expires": expiresIn.toString(),
+      "X-Amz-SignedHeaders": "host",
+      "partNumber": partNumber.toString(),
+      "uploadId": uploadId,
+    };
+
+    const sortedQueryKeys = Object.keys(queryParams).sort();
+    const canonicalQueryString = sortedQueryKeys
+      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+      .join("&");
+
+    const canonicalRequest = [
+      "PUT",
+      encodedPath,
+      canonicalQueryString,
+      `host:${host}\n`,
+      "host",
+      "UNSIGNED-PAYLOAD",
+    ].join("\n");
+
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      amzDate,
+      credentialScope,
+      await sha256(canonicalRequest),
+    ].join("\n");
+
+    const signingKey = await getSignatureKey(
+      this.config.secretAccessKey,
+      dateStamp,
+      this.config.region,
+      "s3"
+    );
+    const signature = toHex(await hmacSha256(signingKey, stringToSign));
+
+    return `${this.config.endpoint}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+  }
+
   async putObject(key: string, body: ArrayBuffer | string, contentType?: string): Promise<void> {
     const fullKey = this.getFullPath(key);
     const path = `/${this.config.bucket}/${fullKey}`;
