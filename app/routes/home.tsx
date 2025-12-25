@@ -348,14 +348,17 @@ function SettingsModal({ onClose, siteTitle }: { onClose: () => void; siteTitle:
         <div className="p-4 space-y-4">
           <div className="text-center py-4">
             <div className="text-3xl font-bold text-zinc-900 dark:text-zinc-100 font-mono mb-1">{siteTitle}</div>
-            <div className="text-xs text-zinc-500 font-mono">v1.0.0</div>
+            <div className="text-xs text-zinc-500 font-mono">v1.1.2</div>
           </div>
           <div className="text-xs text-zinc-600 dark:text-zinc-400 font-mono space-y-2">
             <p>S3 兼容存储聚合服务</p>
             <p className="text-zinc-500">支持: AWS S3 / Cloudflare R2 / 阿里云 OSS / 腾讯云 COS / MinIO 等</p>
+            <p>作者:ooyyh</p>
+            <p>联系方式:3266940347@qq.com</p>
           </div>
           <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4 text-xs text-zinc-500 font-mono">
-            <p>Powered by Cloudflare Workers</p>
+            <p>Powered by Cloudflare Workers && ooyyh</p>
+            
           </div>
         </div>
       </div>
@@ -405,6 +408,8 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
   const [offlineUrl, setOfflineUrl] = useState("");
   const [offlineFilename, setOfflineFilename] = useState("");
   const [offlineDownloading, setOfflineDownloading] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setPath("");
@@ -412,6 +417,7 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
 
   useEffect(() => {
     loadFiles();
+    setSelectedKeys(new Set()); // Clear selection on path change
   }, [storage.id, path]);
 
   const loadFiles = async () => {
@@ -475,6 +481,73 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
       }
     } catch {
       alert("网络错误");
+    }
+  };
+
+  const toggleSelect = (key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedKeys.size === objects.length) {
+      setSelectedKeys(new Set());
+    } else {
+      setSelectedKeys(new Set(objects.map((obj) => obj.key)));
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedKeys.size === 0) return;
+
+    const folders = objects.filter((obj) => obj.isDirectory && selectedKeys.has(obj.key));
+    const files = objects.filter((obj) => !obj.isDirectory && selectedKeys.has(obj.key));
+
+    const msg = folders.length > 0
+      ? `确定删除 ${files.length} 个文件和 ${folders.length} 个文件夹（含其中所有内容）?`
+      : `确定删除 ${files.length} 个文件?`;
+
+    if (!confirm(msg)) return;
+
+    setDeleting(true);
+    let failed = 0;
+
+    try {
+      // Delete folders first (recursive)
+      for (const folder of folders) {
+        try {
+          const res = await fetch(`/api/files/${storage.id}/${folder.key}?action=rmdir`, { method: "DELETE" });
+          if (!res.ok) failed++;
+        } catch {
+          failed++;
+        }
+      }
+
+      // Delete files
+      for (const file of files) {
+        try {
+          const res = await fetch(`/api/files/${storage.id}/${file.key}`, { method: "DELETE" });
+          if (!res.ok) failed++;
+        } catch {
+          failed++;
+        }
+      }
+
+      if (failed > 0) {
+        alert(`删除完成，${failed} 个项目删除失败`);
+      }
+
+      setSelectedKeys(new Set());
+      loadFiles();
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -624,7 +697,7 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
     <div className="h-full flex flex-col">
       {/* Toolbar */}
       <div className="flex items-center justify-between py-2 px-4 border-b border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50">
-        <div className="flex items-center gap-1 text-sm font-mono overflow-x-auto">
+        <div className="flex items-center gap-1 text-sm font-mono overflow-x-auto min-w-0">
           <button onClick={() => setPath("")} className="text-blue-500 hover:text-blue-400 shrink-0">
             {storage.name}
           </button>
@@ -639,8 +712,24 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
               </button>
             </span>
           ))}
+          {/* Selection info */}
+          {selectedKeys.size > 0 && (
+            <span className="ml-2 text-xs text-zinc-500 font-mono">
+              (已选 {selectedKeys.size} 项)
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* Batch delete button */}
+          {isAdmin && selectedKeys.size > 0 && (
+            <button
+              onClick={handleBatchDelete}
+              disabled={deleting}
+              className="text-xs bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white px-3 py-1 font-mono rounded"
+            >
+              {deleting ? "删除中..." : `删除 (${selectedKeys.size})`}
+            </button>
+          )}
           {path && (
             <button onClick={goUp} className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 font-mono px-2 py-1">
               ← 上级
@@ -811,6 +900,16 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
           <table className="w-full text-sm font-mono">
             <thead className="text-xs text-zinc-500 border-b border-zinc-200 dark:border-zinc-800 sticky top-0 bg-zinc-50 dark:bg-zinc-900">
               <tr>
+                {isAdmin && (
+                  <th className="py-2 px-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={objects.length > 0 && selectedKeys.size === objects.length}
+                      onChange={toggleSelectAll}
+                      className="w-4 h-4 rounded border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                    />
+                  </th>
+                )}
                 <th className="text-left py-2 px-4 font-normal">名称</th>
                 <th className="text-right py-2 px-4 font-normal w-24">大小</th>
                 <th className="text-right py-2 px-4 font-normal w-44">修改时间</th>
@@ -819,7 +918,22 @@ function FileBrowser({ storage, isAdmin, isDark }: { storage: StorageInfo; isAdm
             </thead>
             <tbody>
               {objects.map((obj) => (
-                <tr key={obj.key} className="border-b border-zinc-100 dark:border-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800/30">
+                <tr
+                  key={obj.key}
+                  className={`border-b border-zinc-100 dark:border-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800/30 ${
+                    selectedKeys.has(obj.key) ? "bg-blue-50 dark:bg-blue-900/20" : ""
+                  }`}
+                >
+                  {isAdmin && (
+                    <td className="py-2 px-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedKeys.has(obj.key)}
+                        onChange={() => toggleSelect(obj.key)}
+                        className="w-4 h-4 rounded border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                      />
+                    </td>
+                  )}
                   <td className="py-2 px-4">
                     {obj.isDirectory ? (
                       <button
