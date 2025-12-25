@@ -48,6 +48,14 @@ function toHex(buffer: ArrayBuffer): string {
     .join("");
 }
 
+// S3 URI encoding - encode each path segment (same for signature and URL)
+function encodeS3Path(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 async function getSignatureKey(
   key: string,
   dateStamp: string,
@@ -79,7 +87,8 @@ export class S3Client {
     path: string,
     queryParams: Record<string, string> = {},
     headers: Record<string, string> = {},
-    payload: string = ""
+    payload: string = "",
+    useUnsignedPayload: boolean = false
   ): Promise<Record<string, string>> {
     const url = new URL(this.config.endpoint);
     const host = url.host;
@@ -87,18 +96,20 @@ export class S3Client {
     const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
     const dateStamp = amzDate.slice(0, 8);
 
-    const payloadHash = await sha256(payload);
+    const payloadHash = useUnsignedPayload ? "UNSIGNED-PAYLOAD" : await sha256(payload);
 
-    const signedHeaders: Record<string, string> = {
+    // Headers to sign - host is included in signature but not in returned headers
+    // because fetch API sets Host header automatically
+    const headersToSign: Record<string, string> = {
       host,
       "x-amz-content-sha256": payloadHash,
       "x-amz-date": amzDate,
       ...headers,
     };
 
-    const sortedHeaderKeys = Object.keys(signedHeaders).sort();
+    const sortedHeaderKeys = Object.keys(headersToSign).sort();
     const canonicalHeaders = sortedHeaderKeys
-      .map((key) => `${key.toLowerCase()}:${signedHeaders[key].trim()}`)
+      .map((key) => `${key.toLowerCase()}:${headersToSign[key].trim()}`)
       .join("\n");
     const signedHeadersStr = sortedHeaderKeys.map((k) => k.toLowerCase()).join(";");
 
@@ -107,7 +118,8 @@ export class S3Client {
       .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(queryParams[key])}`)
       .join("&");
 
-    const canonicalUri = path.startsWith("/") ? path : "/" + path;
+    const rawCanonicalUri = path.startsWith("/") ? path : "/" + path;
+    const canonicalUri = encodeS3Path(rawCanonicalUri);
     const canonicalRequest = [
       method,
       canonicalUri,
@@ -135,8 +147,11 @@ export class S3Client {
 
     const authorization = `AWS4-HMAC-SHA256 Credential=${this.config.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
 
+    // Return headers to send with request (exclude host - fetch sets it automatically)
     return {
-      ...signedHeaders,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+      ...headers,
       Authorization: authorization,
     };
   }
@@ -147,7 +162,13 @@ export class S3Client {
     maxKeys: number = 1000,
     continuationToken?: string
   ): Promise<ListObjectsResult> {
-    const fullPrefix = this.getFullPath(prefix);
+    // Ensure prefix ends with / when listing a directory (not root)
+    let normalizedPrefix = prefix;
+    if (normalizedPrefix && !normalizedPrefix.endsWith("/")) {
+      normalizedPrefix = normalizedPrefix + "/";
+    }
+
+    const fullPrefix = this.getFullPath(normalizedPrefix);
     const path = `/${this.config.bucket}`;
 
     const queryParams: Record<string, string> = {
@@ -181,9 +202,18 @@ export class S3Client {
     return this.parseListObjectsResponse(xml, fullPrefix);
   }
 
-  private parseListObjectsResponse(xml: string, prefix: string): ListObjectsResult {
+  private parseListObjectsResponse(xml: string, fullPrefix: string): ListObjectsResult {
     const objects: S3Object[] = [];
     const prefixes: string[] = [];
+    const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
+
+    // Decode XML entities
+    const decodeXml = (str: string) => str
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'");
 
     const contentsRegex = /<Contents>([\s\S]*?)<\/Contents>/g;
     const prefixRegex = /<CommonPrefixes>[\s\S]*?<Prefix>(.*?)<\/Prefix>[\s\S]*?<\/CommonPrefixes>/g;
@@ -191,14 +221,24 @@ export class S3Client {
     let match;
     while ((match = contentsRegex.exec(xml)) !== null) {
       const content = match[1];
-      const key = content.match(/<Key>(.*?)<\/Key>/)?.[1] || "";
+      const key = decodeXml(content.match(/<Key>(.*?)<\/Key>/)?.[1] || "");
       const size = parseInt(content.match(/<Size>(.*?)<\/Size>/)?.[1] || "0", 10);
       const lastModified = content.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] || "";
       const etag = content.match(/<ETag>"?(.*?)"?<\/ETag>/)?.[1] || "";
 
-      const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
-      const displayKey = basePath ? key.replace(basePath + "/", "") : key;
-      const name = displayKey.replace(prefix.replace(basePath ? basePath + "/" : "", ""), "").replace(/^\//, "");
+      // Remove basePath prefix to get display key
+      const displayKey = basePath && key.startsWith(basePath + "/")
+        ? key.slice(basePath.length + 1)
+        : key;
+
+      // Remove the current folder prefix to get just the name
+      const relativePrefix = basePath && fullPrefix.startsWith(basePath + "/")
+        ? fullPrefix.slice(basePath.length + 1)
+        : fullPrefix;
+
+      const name = displayKey.startsWith(relativePrefix)
+        ? displayKey.slice(relativePrefix.length)
+        : displayKey;
 
       if (name && !name.endsWith("/")) {
         objects.push({
@@ -213,10 +253,21 @@ export class S3Client {
     }
 
     while ((match = prefixRegex.exec(xml)) !== null) {
-      const p = match[1];
-      const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
-      const displayPrefix = basePath ? p.replace(basePath + "/", "") : p;
-      const name = displayPrefix.replace(prefix.replace(basePath ? basePath + "/" : "", ""), "").replace(/\/$/, "");
+      const p = decodeXml(match[1]);
+
+      // Remove basePath prefix to get display prefix
+      const displayPrefix = basePath && p.startsWith(basePath + "/")
+        ? p.slice(basePath.length + 1)
+        : p;
+
+      // Remove the current folder prefix to get just the name
+      const relativePrefix = basePath && fullPrefix.startsWith(basePath + "/")
+        ? fullPrefix.slice(basePath.length + 1)
+        : fullPrefix;
+
+      const name = displayPrefix.startsWith(relativePrefix)
+        ? displayPrefix.slice(relativePrefix.length).replace(/\/$/, "")
+        : displayPrefix.replace(/\/$/, "");
 
       if (name) {
         prefixes.push(displayPrefix);
@@ -250,8 +301,9 @@ export class S3Client {
     const fullKey = this.getFullPath(key);
     const path = `/${this.config.bucket}/${fullKey}`;
     const headers = await this.signRequest("GET", path);
+    const encodedPath = encodeS3Path(path);
 
-    const response = await fetch(`${this.config.endpoint}${path}`, {
+    const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
       method: "GET",
       headers,
     });
@@ -266,6 +318,7 @@ export class S3Client {
   async getSignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
     const fullKey = this.getFullPath(key);
     const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
     const url = new URL(this.config.endpoint);
     const host = url.host;
 
@@ -289,7 +342,7 @@ export class S3Client {
 
     const canonicalRequest = [
       "GET",
-      path,
+      encodedPath,
       canonicalQueryString,
       `host:${host}\n`,
       "host",
@@ -311,49 +364,29 @@ export class S3Client {
     );
     const signature = toHex(await hmacSha256(signingKey, stringToSign));
 
-    return `${this.config.endpoint}${path}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+    return `${this.config.endpoint}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
   }
 
-  async putObject(key: string, body: ReadableStream | ArrayBuffer | string, contentType?: string): Promise<void> {
+  async putObject(key: string, body: ArrayBuffer | string, contentType?: string): Promise<void> {
     const fullKey = this.getFullPath(key);
     const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
 
-    let bodyData: string | ArrayBuffer;
+    let bodyData: ArrayBuffer;
     if (typeof body === "string") {
-      bodyData = body;
-    } else if (body instanceof ArrayBuffer) {
-      bodyData = body;
+      bodyData = new TextEncoder().encode(body).buffer as ArrayBuffer;
     } else {
-      const reader = body.getReader();
-      const chunks: Uint8Array[] = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-      }
-      const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-      const result = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        result.set(chunk, offset);
-        offset += chunk.length;
-      }
-      bodyData = result.buffer;
+      bodyData = body;
     }
 
-    const bodyString = typeof bodyData === "string" ? bodyData : "";
-    const additionalHeaders: Record<string, string> = {};
-    if (contentType) {
-      additionalHeaders["content-type"] = contentType;
-    }
+    // Use UNSIGNED-PAYLOAD for binary uploads
+    const headers = await this.signRequest("PUT", path, {}, {}, "", true);
 
-    const headers = await this.signRequest("PUT", path, {}, additionalHeaders, bodyString);
-
-    const response = await fetch(`${this.config.endpoint}${path}`, {
+    const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
       method: "PUT",
       headers: {
         ...headers,
-        ...(contentType ? { "Content-Type": contentType } : {}),
+        "Content-Type": contentType || "application/octet-stream",
       },
       body: bodyData,
     });
@@ -367,9 +400,10 @@ export class S3Client {
   async deleteObject(key: string): Promise<void> {
     const fullKey = this.getFullPath(key);
     const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
     const headers = await this.signRequest("DELETE", path);
 
-    const response = await fetch(`${this.config.endpoint}${path}`, {
+    const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
       method: "DELETE",
       headers,
     });
@@ -383,9 +417,10 @@ export class S3Client {
   async headObject(key: string): Promise<{ contentLength: number; contentType: string; lastModified: string } | null> {
     const fullKey = this.getFullPath(key);
     const path = `/${this.config.bucket}/${fullKey}`;
+    const encodedPath = encodeS3Path(path);
     const headers = await this.signRequest("HEAD", path);
 
-    const response = await fetch(`${this.config.endpoint}${path}`, {
+    const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
       method: "HEAD",
       headers,
     });

@@ -139,12 +139,13 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     const contentType = request.headers.get("content-type") || "application/octet-stream";
 
     try {
-      if (request.body) {
-        await s3Client.putObject(path, request.body, contentType);
-        return Response.json({ success: true, path });
-      } else {
+      // Read body as ArrayBuffer first
+      const bodyBuffer = await request.arrayBuffer();
+      if (bodyBuffer.byteLength === 0) {
         return Response.json({ error: "No file body provided" }, { status: 400 });
       }
+      await s3Client.putObject(path, bodyBuffer, contentType);
+      return Response.json({ success: true, path });
     } catch (error) {
       return Response.json(
         { error: error instanceof Error ? error.message : "Failed to upload file" },

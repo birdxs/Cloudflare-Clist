@@ -4,7 +4,9 @@
       "Bash(npm run cf-typegen:*)",
       "Bash(npm run typecheck:*)",
       "Bash(npm run build:*)",
-      "Bash(npx wrangler d1 execute:*)"
+      "Bash(npx wrangler d1 execute:*)",
+      "Bash(npm run typecheck:workers:*)",
+      "Bash(npm run:*)"
     ]
   }
 }
