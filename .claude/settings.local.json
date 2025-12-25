@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run cf-typegen:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx wrangler d1 execute:*)"
+    ]
+  }
+}
