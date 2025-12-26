@@ -1593,6 +1593,34 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         </main>
       </div>
 
+      {/* Footer */}
+      <footer className="shrink-0 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2">
+        <div className="flex items-center justify-center gap-4 text-xs text-zinc-500 dark:text-zinc-500 font-mono">
+          <a
+            href="https://github.com/ooyyh/Cloudflare-Clist"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-zinc-700 dark:hover:text-zinc-300 transition"
+          >
+            GitHub
+          </a>
+          <span className="text-zinc-300 dark:text-zinc-700">|</span>
+          <span>Made by <span className="text-zinc-600 dark:text-zinc-400">ooyyh</span></span>
+          <span className="text-zinc-300 dark:text-zinc-700">|</span>
+          <span className="flex items-center gap-1">
+            Powered by
+            <a
+              href="https://www.cloudflare.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-orange-500 hover:text-orange-400 transition"
+            >
+              Cloudflare
+            </a>
+          </span>
+        </div>
+      </footer>
+
       {/* Modals */}
       {showLogin && (
         <LoginModal
