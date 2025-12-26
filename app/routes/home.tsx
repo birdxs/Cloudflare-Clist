@@ -629,7 +629,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
   const uploadMultipart = async (file: File, uploadPath: string, chunkSize: number) => {
     const totalParts = Math.ceil(file.size / chunkSize);
     const contentType = file.type || "application/octet-stream";
-    const CONCURRENT_UPLOADS = 3;
+    const CONCURRENT_UPLOADS = 5;
 
     // Check for existing upload in localStorage (resume support)
     const storageKey = `multipart_${storage.id}_${uploadPath}_${file.size}`;
@@ -637,6 +637,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
     let uploadId: string;
     let completedParts: { partNumber: number; etag: string }[] = [];
     let startPart = 0;
+    let useDirectUpload = true; // Try direct S3 upload first
 
     if (savedState) {
       try {
@@ -647,6 +648,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
             uploadId = parsed.uploadId;
             completedParts = parsed.parts;
             startPart = completedParts.length;
+            useDirectUpload = parsed.useDirectUpload ?? true;
           } else {
             try {
               await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-abort`, {
@@ -683,6 +685,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
         uploadId,
         fileName: file.name,
         parts: [],
+        useDirectUpload: true,
       }));
     }
 
@@ -711,56 +714,126 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
     updateProgress();
 
     try {
-      // Build upload queue
-      const uploadQueue = Array.from({ length: totalParts - startPart }, (_, i) => {
-        const partNumber = startPart + i + 1;
-        return {
-          partNumber,
-          start: (partNumber - 1) * chunkSize,
-          end: Math.min(partNumber * chunkSize, file.size),
-        };
-      });
+      const remainingParts = Array.from({ length: totalParts - startPart }, (_, i) => startPart + i + 1);
 
-      // Upload part through Workers proxy with XHR for progress
-      const uploadPart = (item: { partNumber: number; start: number; end: number }): Promise<{ partNumber: number; etag: string }> => {
+      // Get signed URLs for direct upload
+      let signedUrls: Record<number, string> = {};
+      if (useDirectUpload) {
+        try {
+          const urlsRes = await fetch(`/api/files/${storage.id}/${uploadPath}?action=multipart-urls`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploadId, partNumbers: remainingParts }),
+          });
+          if (urlsRes.ok) {
+            const data = await urlsRes.json() as { urls: Record<number, string> };
+            signedUrls = data.urls;
+          }
+        } catch { /* will fallback to proxy */ }
+      }
+
+      const uploadQueue = remainingParts.map((partNumber) => ({
+        partNumber,
+        start: (partNumber - 1) * chunkSize,
+        end: Math.min(partNumber * chunkSize, file.size),
+      }));
+
+      // Upload part - tries direct S3 first, falls back to Workers proxy
+      const uploadPart = async (item: { partNumber: number; start: number; end: number }): Promise<{ partNumber: number; etag: string }> => {
         const chunk = file.slice(item.start, item.end);
 
+        // Try direct S3 upload first
+        if (useDirectUpload && signedUrls[item.partNumber]) {
+          try {
+            const result = await uploadPartDirect(chunk, signedUrls[item.partNumber], item.partNumber);
+            return result;
+          } catch (e) {
+            // CORS or network error - switch to proxy mode
+            console.log("Direct upload failed, switching to proxy mode");
+            useDirectUpload = false;
+            // Update saved state
+            localStorage.setItem(storageKey, JSON.stringify({
+              uploadId,
+              fileName: file.name,
+              parts: completedParts,
+              useDirectUpload: false,
+            }));
+          }
+        }
+
+        // Fallback: upload through Workers proxy
+        return uploadPartProxy(chunk, uploadPath, uploadId, item.partNumber);
+      };
+
+      const uploadPartDirect = (chunk: Blob, url: string, partNumber: number): Promise<{ partNumber: number; etag: string }> => {
         return new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
 
           xhr.upload.onprogress = (event) => {
             if (event.lengthComputable) {
-              partProgress[item.partNumber] = event.loaded;
+              partProgress[partNumber] = event.loaded;
               updateProgress();
             }
           };
 
           xhr.onload = () => {
-            delete partProgress[item.partNumber];
+            delete partProgress[partNumber];
+            if (xhr.status >= 200 && xhr.status < 300) {
+              const etag = xhr.getResponseHeader("ETag")?.replace(/"/g, "") || "";
+              totalBytesUploaded += chunk.size;
+              resolve({ partNumber, etag });
+            } else {
+              reject(new Error(`Direct upload failed: ${xhr.status}`));
+            }
+          };
+
+          xhr.onerror = () => {
+            delete partProgress[partNumber];
+            reject(new Error("Direct upload network error"));
+          };
+
+          xhr.open("PUT", url);
+          xhr.send(chunk);
+        });
+      };
+
+      const uploadPartProxy = (chunk: Blob, path: string, upId: string, partNumber: number): Promise<{ partNumber: number; etag: string }> => {
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              partProgress[partNumber] = event.loaded;
+              updateProgress();
+            }
+          };
+
+          xhr.onload = () => {
+            delete partProgress[partNumber];
             if (xhr.status >= 200 && xhr.status < 300) {
               try {
                 const data = JSON.parse(xhr.responseText);
                 totalBytesUploaded += chunk.size;
-                resolve({ partNumber: item.partNumber, etag: data.etag });
+                resolve({ partNumber, etag: data.etag });
               } catch {
-                reject(new Error(`解析响应失败: 分片 ${item.partNumber}`));
+                reject(new Error(`解析响应失败: 分片 ${partNumber}`));
               }
             } else {
               try {
                 const data = JSON.parse(xhr.responseText);
-                reject(new Error(data.error || `上传分片 ${item.partNumber} 失败`));
+                reject(new Error(data.error || `分片 ${partNumber} 失败`));
               } catch {
-                reject(new Error(`上传分片 ${item.partNumber} 失败: ${xhr.status}`));
+                reject(new Error(`分片 ${partNumber} 失败: ${xhr.status}`));
               }
             }
           };
 
           xhr.onerror = () => {
-            delete partProgress[item.partNumber];
-            reject(new Error(`网络错误: 分片 ${item.partNumber}`));
+            delete partProgress[partNumber];
+            reject(new Error(`网络错误: 分片 ${partNumber}`));
           };
 
-          const url = `/api/files/${storage.id}/${uploadPath}?action=multipart-upload&uploadId=${encodeURIComponent(uploadId)}&partNumber=${item.partNumber}`;
+          const url = `/api/files/${storage.id}/${path}?action=multipart-upload&uploadId=${encodeURIComponent(upId)}&partNumber=${partNumber}`;
           xhr.open("PUT", url);
           xhr.send(chunk);
         });
@@ -780,14 +853,16 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
             uploadId,
             fileName: file.name,
             parts: completedParts,
+            useDirectUpload,
           }));
 
           updateProgress();
         }
       };
 
-      // Start concurrent uploads
-      const workers = Array(Math.min(CONCURRENT_UPLOADS, uploadQueue.length))
+      // Start concurrent uploads (reduce concurrency for proxy mode)
+      const concurrency = useDirectUpload ? CONCURRENT_UPLOADS : 3;
+      const workers = Array(Math.min(concurrency, uploadQueue.length))
         .fill(null)
         .map(() => runNext());
 
