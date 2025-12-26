@@ -1343,6 +1343,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
   const [showAnnouncement, setShowAnnouncement] = useState(false);
   const [editingStorage, setEditingStorage] = useState<StorageInfo | null>(null);
   const [isDark, setIsDark] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const themeButtonRef = useRef<HTMLButtonElement>(null);
 
   const siteTitle = loaderData.siteTitle || "CList";
@@ -1498,23 +1499,32 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* Sidebar */}
-        <aside className="w-64 border-r border-zinc-200 dark:border-zinc-800 shrink-0 bg-white dark:bg-zinc-900/50 flex flex-col">
+        <aside className={`${sidebarCollapsed ? "w-0" : "w-64"} border-r border-zinc-200 dark:border-zinc-800 shrink-0 bg-white dark:bg-zinc-900/50 flex flex-col transition-all duration-300 overflow-hidden relative`}>
           <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
-            <span className="text-xs text-zinc-500 font-mono uppercase tracking-wider">存储列表</span>
-            {isAdmin && (
+            <span className="text-xs text-zinc-500 font-mono uppercase tracking-wider whitespace-nowrap">存储列表</span>
+            <div className="flex items-center gap-2">
+              {isAdmin && (
+                <button
+                  onClick={() => { setEditingStorage(null); setShowStorageForm(true); }}
+                  className="text-xs text-blue-500 hover:text-blue-400 font-mono whitespace-nowrap"
+                >
+                  + 添加
+                </button>
+              )}
               <button
-                onClick={() => { setEditingStorage(null); setShowStorageForm(true); }}
-                className="text-xs text-blue-500 hover:text-blue-400 font-mono"
+                onClick={() => setSidebarCollapsed(true)}
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-sm"
+                title="收起侧边栏"
               >
-                + 添加
+                ‹
               </button>
-            )}
+            </div>
           </div>
           <div className="overflow-y-auto flex-1">
             {storages.length === 0 ? (
-              <div className="p-4 text-center text-zinc-400 dark:text-zinc-600 text-xs font-mono">
+              <div className="p-4 text-center text-zinc-400 dark:text-zinc-600 text-xs font-mono whitespace-nowrap">
                 暂无存储
               </div>
             ) : (
@@ -1532,7 +1542,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                     <div className={`text-sm font-mono truncate ${selectedStorage?.id === s.id ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-600 dark:text-zinc-400"}`}>
                       {s.name}
                     </div>
-                    <div className="text-xs text-zinc-400 dark:text-zinc-600 font-mono">
+                    <div className="text-xs text-zinc-400 dark:text-zinc-600 font-mono whitespace-nowrap">
                       {s.isPublic ? "公开" : "私有"}
                     </div>
                   </div>
@@ -1559,6 +1569,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             )}
           </div>
         </aside>
+
+        {/* Sidebar Expand Button - only show when collapsed */}
+        {sidebarCollapsed && (
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="absolute left-0 top-1/2 -translate-y-1/2 z-10 w-4 h-8 flex items-center justify-center bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-500 dark:text-zinc-400 rounded-r text-xs shadow-sm transition-colors"
+            title="展开侧边栏"
+          >
+            ›
+          </button>
+        )}
 
         {/* Main */}
         <main className="flex-1 bg-zinc-50 dark:bg-zinc-900 min-w-0 overflow-hidden">
