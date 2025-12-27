@@ -40,13 +40,13 @@ interface StorageRow {
 function rowToStorage(row: StorageRow): Storage {
   return {
     id: row.id,
-    name: row.name,
-    endpoint: row.endpoint,
-    region: row.region,
-    accessKeyId: row.access_key_id,
-    secretAccessKey: row.secret_access_key,
-    bucket: row.bucket,
-    basePath: row.base_path || "",
+    name: row.name?.trim() || "",
+    endpoint: row.endpoint?.trim() || "",
+    region: row.region?.trim() || "",
+    accessKeyId: row.access_key_id?.trim() || "",
+    secretAccessKey: row.secret_access_key?.trim() || "",
+    bucket: row.bucket?.trim() || "",
+    basePath: row.base_path?.trim() || "",
     isPublic: row.is_public === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -97,6 +97,15 @@ export async function createStorage(
   db: D1Database,
   input: StorageInput
 ): Promise<Storage> {
+  // Trim all string inputs to prevent signature mismatch errors
+  const name = input.name.trim();
+  const endpoint = input.endpoint.trim();
+  const region = (input.region || "us-east-1").trim();
+  const accessKeyId = input.accessKeyId.trim();
+  const secretAccessKey = input.secretAccessKey.trim();
+  const bucket = input.bucket.trim();
+  const basePath = (input.basePath || "").trim();
+
   const result = await db
     .prepare(
       `INSERT INTO storages (name, endpoint, region, access_key_id, secret_access_key, bucket, base_path, is_public)
@@ -104,13 +113,13 @@ export async function createStorage(
        RETURNING *`
     )
     .bind(
-      input.name,
-      input.endpoint,
-      input.region || "us-east-1",
-      input.accessKeyId,
-      input.secretAccessKey,
-      input.bucket,
-      input.basePath || "",
+      name,
+      endpoint,
+      region,
+      accessKeyId,
+      secretAccessKey,
+      bucket,
+      basePath,
       input.isPublic ? 1 : 0
     )
     .first<StorageRow>();
@@ -135,33 +144,34 @@ export async function updateStorage(
   const updates: string[] = [];
   const values: (string | number)[] = [];
 
+  // Trim all string inputs to prevent signature mismatch errors
   if (input.name !== undefined) {
     updates.push("name = ?");
-    values.push(input.name);
+    values.push(input.name.trim());
   }
   if (input.endpoint !== undefined) {
     updates.push("endpoint = ?");
-    values.push(input.endpoint);
+    values.push(input.endpoint.trim());
   }
   if (input.region !== undefined) {
     updates.push("region = ?");
-    values.push(input.region);
+    values.push(input.region.trim());
   }
   if (input.accessKeyId !== undefined) {
     updates.push("access_key_id = ?");
-    values.push(input.accessKeyId);
+    values.push(input.accessKeyId.trim());
   }
   if (input.secretAccessKey !== undefined) {
     updates.push("secret_access_key = ?");
-    values.push(input.secretAccessKey);
+    values.push(input.secretAccessKey.trim());
   }
   if (input.bucket !== undefined) {
     updates.push("bucket = ?");
-    values.push(input.bucket);
+    values.push(input.bucket.trim());
   }
   if (input.basePath !== undefined) {
     updates.push("base_path = ?");
-    values.push(input.basePath);
+    values.push(input.basePath.trim());
   }
   if (input.isPublic !== undefined) {
     updates.push("is_public = ?");

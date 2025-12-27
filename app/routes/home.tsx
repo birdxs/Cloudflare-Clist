@@ -428,6 +428,13 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
   const [offlineDownloading, setOfflineDownloading] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<S3Object | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<S3Object | null>(null);
+  const [moveDestPath, setMoveDestPath] = useState("");
+  const [moving, setMoving] = useState(false);
+  const [allFolders, setAllFolders] = useState<string[]>([]);
 
   useEffect(() => {
     setPath("");
@@ -499,6 +506,97 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
       }
     } catch {
       alert("网络错误");
+    }
+  };
+
+  const startRename = (obj: S3Object) => {
+    setRenameTarget(obj);
+    setRenameValue(obj.name);
+  };
+
+  const handleRename = async () => {
+    if (!renameTarget || !renameValue.trim()) return;
+    if (renameValue.includes("/")) {
+      alert("名称不能包含 /");
+      return;
+    }
+    if (renameValue === renameTarget.name) {
+      setRenameTarget(null);
+      return;
+    }
+
+    setRenaming(true);
+    try {
+      const key = renameTarget.isDirectory ? renameTarget.key : renameTarget.key;
+      const res = await fetch(`/api/files/${storage.id}/${key}?action=rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newName: renameValue.trim() }),
+      });
+      if (res.ok) {
+        setRenameTarget(null);
+        loadFiles();
+      } else {
+        const data = (await res.json()) as { error?: string };
+        alert(data.error || "重命名失败");
+      }
+    } catch {
+      alert("网络错误");
+    } finally {
+      setRenaming(false);
+    }
+  };
+
+  const loadAllFolders = async () => {
+    const folders: string[] = [""];
+    const listRecursive = async (prefix: string) => {
+      try {
+        const res = await fetch(`/api/files/${storage.id}/${prefix}?action=list`);
+        if (res.ok) {
+          const data = (await res.json()) as { objects?: S3Object[] };
+          for (const obj of data.objects || []) {
+            if (obj.isDirectory) {
+              folders.push(obj.key);
+              await listRecursive(obj.key);
+            }
+          }
+        }
+      } catch {
+        // Ignore errors
+      }
+    };
+    await listRecursive("");
+    setAllFolders(folders);
+  };
+
+  const startMove = async (obj: S3Object) => {
+    setMoveTarget(obj);
+    setMoveDestPath("");
+    await loadAllFolders();
+  };
+
+  const handleMove = async () => {
+    if (!moveTarget) return;
+
+    setMoving(true);
+    try {
+      const key = moveTarget.isDirectory ? moveTarget.key : moveTarget.key;
+      const res = await fetch(`/api/files/${storage.id}/${key}?action=move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destPath: moveDestPath }),
+      });
+      if (res.ok) {
+        setMoveTarget(null);
+        loadFiles();
+      } else {
+        const data = (await res.json()) as { error?: string };
+        alert(data.error || "移动失败");
+      }
+    } catch {
+      alert("网络错误");
+    } finally {
+      setMoving(false);
     }
   };
 
@@ -1271,13 +1369,29 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
                   <td className="py-2 px-4 text-right">
                     {obj.isDirectory ? (
                       isAdmin && (
-                        <button
-                          onClick={() => deleteFolder(obj.key, obj.name)}
-                          className="text-zinc-400 dark:text-zinc-500 hover:text-red-500"
-                          title="删除文件夹"
-                        >
-                          ×
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => startRename(obj)}
+                            className="text-zinc-400 dark:text-zinc-500 hover:text-blue-500"
+                            title="重命名"
+                          >
+                            ✎
+                          </button>
+                          <button
+                            onClick={() => startMove(obj)}
+                            className="text-zinc-400 dark:text-zinc-500 hover:text-blue-500"
+                            title="移动"
+                          >
+                            ⤷
+                          </button>
+                          <button
+                            onClick={() => deleteFolder(obj.key, obj.name)}
+                            className="text-zinc-400 dark:text-zinc-500 hover:text-red-500"
+                            title="删除文件夹"
+                          >
+                            ×
+                          </button>
+                        </div>
                       )
                     ) : (
                       <div className="flex items-center justify-end gap-2">
@@ -1298,13 +1412,29 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
                           ↓
                         </button>
                         {isAdmin && (
-                          <button
-                            onClick={() => deleteFile(obj.key)}
-                            className="text-zinc-400 dark:text-zinc-500 hover:text-red-500"
-                            title="删除"
-                          >
-                            ×
-                          </button>
+                          <>
+                            <button
+                              onClick={() => startRename(obj)}
+                              className="text-zinc-400 dark:text-zinc-500 hover:text-blue-500"
+                              title="重命名"
+                            >
+                              ✎
+                            </button>
+                            <button
+                              onClick={() => startMove(obj)}
+                              className="text-zinc-400 dark:text-zinc-500 hover:text-blue-500"
+                              title="移动"
+                            >
+                              ⤷
+                            </button>
+                            <button
+                              onClick={() => deleteFile(obj.key)}
+                              className="text-zinc-400 dark:text-zinc-500 hover:text-red-500"
+                              title="删除"
+                            >
+                              ×
+                            </button>
+                          </>
                         )}
                       </div>
                     )}
@@ -1328,6 +1458,92 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
           hasPrev={currentPreviewIndex > 0}
           hasNext={currentPreviewIndex < previewableFiles.length - 1}
         />
+      )}
+
+      {/* Rename Modal */}
+      {renameTarget && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setRenameTarget(null)}>
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 w-full max-w-sm rounded-lg shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between">
+              <span className="text-zinc-900 dark:text-zinc-100 font-mono text-sm">重命名</span>
+              <button onClick={() => setRenameTarget(null)} className="text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">×</button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1 font-mono">新名称</label>
+                <input
+                  type="text"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleRename()}
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
+                  autoFocus
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setRenameTarget(null)}
+                  className="flex-1 px-3 py-2 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleRename}
+                  disabled={renaming || !renameValue.trim()}
+                  className="flex-1 px-3 py-2 bg-blue-500 text-white text-sm hover:bg-blue-600 disabled:opacity-50 rounded"
+                >
+                  {renaming ? "处理中..." : "确定"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move Modal */}
+      {moveTarget && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setMoveTarget(null)}>
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 w-full max-w-sm rounded-lg shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between">
+              <span className="text-zinc-900 dark:text-zinc-100 font-mono text-sm">移动到</span>
+              <button onClick={() => setMoveTarget(null)} className="text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">×</button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="text-xs text-zinc-500 mb-2 font-mono">
+                移动: {moveTarget.name}
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1 font-mono">目标文件夹</label>
+                <select
+                  value={moveDestPath}
+                  onChange={(e) => setMoveDestPath(e.target.value)}
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
+                >
+                  {allFolders.map((folder) => (
+                    <option key={folder} value={folder}>
+                      {folder === "" ? "/ (根目录)" : "/" + folder}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setMoveTarget(null)}
+                  className="flex-1 px-3 py-2 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleMove}
+                  disabled={moving}
+                  className="flex-1 px-3 py-2 bg-blue-500 text-white text-sm hover:bg-blue-600 disabled:opacity-50 rounded"
+                >
+                  {moving ? "处理中..." : "确定"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

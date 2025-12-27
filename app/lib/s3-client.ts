@@ -473,6 +473,36 @@ export class S3Client {
     }
   }
 
+  async copyObject(sourceKey: string, destKey: string): Promise<void> {
+    const fullSourceKey = this.getFullPath(sourceKey);
+    const fullDestKey = this.getFullPath(destKey);
+    const path = `/${this.config.bucket}/${fullDestKey}`;
+    const encodedPath = encodeS3Path(path);
+
+    // x-amz-copy-source must be URL encoded
+    const copySource = `/${this.config.bucket}/${fullSourceKey}`
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+
+    const headers = await this.signRequest("PUT", path, {}, {
+      "x-amz-copy-source": copySource,
+    });
+
+    const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "x-amz-copy-source": copySource,
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`S3 CopyObject failed: ${response.status} ${text}`);
+    }
+  }
+
   async createFolder(folderPath: string): Promise<void> {
     // S3 folders are represented by empty objects with trailing slash
     const normalizedPath = folderPath.endsWith("/") ? folderPath : folderPath + "/";

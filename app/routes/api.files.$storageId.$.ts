@@ -256,6 +256,151 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     }
   }
 
+  // Rename file or folder
+  if (method === "POST" && action === "rename") {
+    try {
+      const body = await request.json() as { newName?: string };
+      const { newName } = body;
+
+      if (!newName || newName.includes("/")) {
+        return Response.json({ error: "Invalid new name" }, { status: 400 });
+      }
+
+      const isDirectory = path.endsWith("/");
+      const cleanPath = path.replace(/\/$/, "");
+      const parentPath = cleanPath.includes("/")
+        ? cleanPath.substring(0, cleanPath.lastIndexOf("/") + 1)
+        : "";
+      const newPath = parentPath + newName + (isDirectory ? "/" : "");
+
+      if (isDirectory) {
+        // Rename folder: copy all objects with new prefix, then delete old ones
+        const listAll = async (prefix: string): Promise<string[]> => {
+          const keys: string[] = [];
+          let continuationToken: string | undefined;
+
+          do {
+            const result = await s3Client.listObjects(prefix, "", 1000, continuationToken);
+            for (const obj of result.objects) {
+              keys.push(obj.key);
+            }
+            continuationToken = result.nextContinuationToken;
+          } while (continuationToken);
+
+          return keys;
+        };
+
+        const oldPrefix = cleanPath + "/";
+        const newPrefix = parentPath + newName + "/";
+        const keysToMove = await listAll(oldPrefix);
+
+        // Copy all objects to new location
+        for (const key of keysToMove) {
+          const newKey = newPrefix + key.substring(oldPrefix.length);
+          await s3Client.copyObject(key, newKey);
+        }
+
+        // Delete old objects
+        for (const key of keysToMove) {
+          await s3Client.deleteObject(key);
+        }
+
+        // Try to delete the old folder object
+        try {
+          await s3Client.deleteObject(oldPrefix);
+        } catch {
+          // Ignore if not exists
+        }
+
+        return Response.json({ success: true, newPath: newPrefix, moved: keysToMove.length });
+      } else {
+        // Rename single file
+        await s3Client.copyObject(path, newPath);
+        await s3Client.deleteObject(path);
+        return Response.json({ success: true, newPath });
+      }
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to rename" },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Move file or folder
+  if (method === "POST" && action === "move") {
+    try {
+      const body = await request.json() as { destPath?: string };
+      const { destPath } = body;
+
+      if (destPath === undefined) {
+        return Response.json({ error: "destPath is required" }, { status: 400 });
+      }
+
+      const isDirectory = path.endsWith("/");
+      const cleanPath = path.replace(/\/$/, "");
+      const fileName = cleanPath.includes("/")
+        ? cleanPath.substring(cleanPath.lastIndexOf("/") + 1)
+        : cleanPath;
+
+      // destPath is the target directory, fileName is preserved
+      const targetDir = destPath.endsWith("/") ? destPath : (destPath ? destPath + "/" : "");
+      const newPath = targetDir + fileName + (isDirectory ? "/" : "");
+
+      if (isDirectory) {
+        // Move folder: copy all objects with new prefix, then delete old ones
+        const listAll = async (prefix: string): Promise<string[]> => {
+          const keys: string[] = [];
+          let continuationToken: string | undefined;
+
+          do {
+            const result = await s3Client.listObjects(prefix, "", 1000, continuationToken);
+            for (const obj of result.objects) {
+              keys.push(obj.key);
+            }
+            continuationToken = result.nextContinuationToken;
+          } while (continuationToken);
+
+          return keys;
+        };
+
+        const oldPrefix = cleanPath + "/";
+        const newPrefix = targetDir + fileName + "/";
+        const keysToMove = await listAll(oldPrefix);
+
+        // Copy all objects to new location
+        for (const key of keysToMove) {
+          const newKey = newPrefix + key.substring(oldPrefix.length);
+          await s3Client.copyObject(key, newKey);
+        }
+
+        // Delete old objects
+        for (const key of keysToMove) {
+          await s3Client.deleteObject(key);
+        }
+
+        // Try to delete the old folder object
+        try {
+          await s3Client.deleteObject(oldPrefix);
+        } catch {
+          // Ignore if not exists
+        }
+
+        return Response.json({ success: true, newPath: newPrefix, moved: keysToMove.length });
+      } else {
+        // Move single file
+        await s3Client.copyObject(path, newPath);
+        await s3Client.deleteObject(path);
+        return Response.json({ success: true, newPath });
+      }
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to move" },
+        { status: 500 }
+      );
+    }
+  }
+
   // Offline download from URL
   if (method === "POST" && action === "fetch") {
     try {
