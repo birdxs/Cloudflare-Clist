@@ -101,6 +101,9 @@ export class WebdevClient {
       const prefixes: string[] = [];
       const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
 
+      // Extract the path from endpoint to remove it from href
+      const endpointPath = new URL(this.config.endpoint).pathname.replace(/^\/|\/$/g, "");
+
       const decodeXml = (str: string) => str
         .replace(/&amp;/g, "&")
         .replace(/&lt;/g, "<")
@@ -126,9 +129,15 @@ export class WebdevClient {
         // Decode URL-encoded characters and remove leading slash
         let decodedHref = decodeURIComponent(href).replace(/^\//, "");
 
+        // Remove endpoint path if present (e.g., if endpoint is https://host/dav, remove 'dav')
+        if (endpointPath) {
+          const endpointPathRegex = new RegExp(`^${endpointPath}/?`, 'i');
+          decodedHref = decodedHref.replace(endpointPathRegex, "");
+        }
+
         // Remove base path if present to match with expectedCurrent
         if (basePath) {
-          const basePathRegex = new RegExp(`^/?(?:${basePath}/?)?`, 'i');
+          const basePathRegex = new RegExp(`^${basePath}/?`, 'i');
           decodedHref = decodedHref.replace(basePathRegex, "");
         }
 
@@ -141,6 +150,7 @@ export class WebdevClient {
           expectedCurrent,
           fullPrefix,
           basePath,
+          endpointPath,
           shouldSkip
         });
 
@@ -168,12 +178,17 @@ export class WebdevClient {
         if (!displayName) {
           // Decode URL-encoded characters in href
           let decodedHref = decodeURIComponent(href);
+          // Remove leading slash
+          decodedHref = decodedHref.replace(/^\//, "");
+          // Remove endpoint path if present
+          if (endpointPath) {
+            const endpointPathRegex = new RegExp(`^${endpointPath}/?`, 'i');
+            decodedHref = decodedHref.replace(endpointPathRegex, "");
+          }
           // Remove base path if present
           if (basePath) {
-            const basePathRegex = new RegExp(`^/?(?:${basePath}/?)?`, 'i');
+            const basePathRegex = new RegExp(`^${basePath}/?`, 'i');
             decodedHref = decodedHref.replace(basePathRegex, "");
-          } else {
-            decodedHref = decodedHref.replace(/^\//, "");
           }
           // Remove trailing slash for folders before extracting name
           decodedHref = decodedHref.replace(/\/$/, "");
