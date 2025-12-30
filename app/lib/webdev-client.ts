@@ -84,6 +84,8 @@ export class WebdevClient {
       }
 
       const xml = await response.text();
+      console.log('[WebDAV] PROPFIND Request:', { url, fullPrefix, normalizedPrefix });
+      console.log('[WebDAV] PROPFIND Response:', xml.substring(0, 1000));
       return this.parsePropfindResponse(xml, fullPrefix, normalizedPrefix);
     } catch (error) {
       throw new Error(`WebDAV listObjects failed: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -106,28 +108,62 @@ export class WebdevClient {
         .replace(/&quot;/g, '"')
         .replace(/&apos;/g, "'");
 
-      // Parse response entries - support various namespace prefixes (D:, d:, or none)
-      const responseRegex = /<(?:D:|d:|)response[^>]*>([\s\S]*?)<\/(?:D:|d:|)response>/gi;
+      // Parse response entries - support any namespace prefix
+      const responseRegex = /<[^:>]*:?response[^>]*>([\s\S]*?)<\/[^:>]*:?response>/gi;
       let match;
 
       while ((match = responseRegex.exec(xml)) !== null) {
         const response = match[1];
 
         // Skip the parent directory entry - support various namespace prefixes
-        const hrefMatch = response.match(/<(?:D:|d:|)href[^>]*>(.*?)<\/(?:D:|d:|)href>/i);
+        // Match href with any namespace prefix
+        const hrefMatch = response.match(/<[^:>]*:?href[^>]*>(.*?)<\/[^:>]*:?href>/i);
         if (!hrefMatch) continue;
 
         const href = decodeXml(hrefMatch[1]);
-        const resourceTypeMatch = response.match(/<(?:D:|d:|)resourcetype[^>]*>([\s\S]*?)<\/(?:D:|d:|)resourcetype>/i);
-        const isDirectory = resourceTypeMatch && resourceTypeMatch[1].toLowerCase().includes("collection");
-  
+
+        // Skip if this is the current path itself (check early to avoid processing)
+        // Decode URL-encoded characters and remove leading slash
+        let decodedHref = decodeURIComponent(href).replace(/^\//, "");
+
+        // Remove base path if present to match with expectedCurrent
+        if (basePath) {
+          const basePathRegex = new RegExp(`^/?(?:${basePath}/?)?`, 'i');
+          decodedHref = decodedHref.replace(basePathRegex, "");
+        }
+
+        const expectedCurrent = fullPrefix.replace(/^\//, "");
+        const shouldSkip = decodedHref === expectedCurrent || decodedHref === expectedCurrent + "/";
+
+        console.log('[WebDAV] Skip check:', {
+          href,
+          decodedHref,
+          expectedCurrent,
+          fullPrefix,
+          basePath,
+          shouldSkip
+        });
+
+        if (shouldSkip) {
+          console.log('[WebDAV] Skipping current directory:', href);
+          continue;
+        }
+
+        // Match resourcetype with any namespace prefix (lp1:, D:, d:, or none)
+        const resourceTypeMatch = response.match(/<[^:>]*:?resourcetype[^>]*>([\s\S]*?)<\/[^:>]*:?resourcetype>/i);
+
+        // Check if resourcetype contains collection tag with any namespace prefix
+        const isDirectory = resourceTypeMatch &&
+          /<[^:>]*:?collection[\s\/>]/i.test(resourceTypeMatch[0]);
+
         // Get display name, fallback to filename from href if not provided
         let displayName = "";
-        const displayNameMatch = response.match(/<(?:D:|d:|)displayname[^>]*>(.*?)<\/(?:D:|d:|)displayname>/i);
-        if (displayNameMatch) {
+        // Match displayname with any namespace prefix
+        const displayNameMatch = response.match(/<[^:>]*:?displayname[^>]*>(.*?)<\/[^:>]*:?displayname>/i);
+        if (displayNameMatch && displayNameMatch[1]) {
           displayName = decodeXml(displayNameMatch[1]);
         }
-  
+
         // If no displayname provided, extract filename from href
         if (!displayName) {
           // Decode URL-encoded characters in href
@@ -145,23 +181,25 @@ export class WebdevClient {
           const pathParts = decodedHref.split("/");
           displayName = pathParts[pathParts.length - 1];
         }
-  
+
         // Skip if no display name could be determined
         if (!displayName) continue;
 
-        const contentLengthMatch = response.match(/<(?:D:|d:|)getcontentlength[^>]*>(.*?)<\/(?:D:|d:|)getcontentlength>/i);
+        const contentLengthMatch = response.match(/<[^:>]*:?getcontentlength[^>]*>(.*?)<\/[^:>]*:?getcontentlength>/i);
         const size = contentLengthMatch ? parseInt(contentLengthMatch[1], 10) : 0;
 
-        const lastModifiedMatch = response.match(/<(?:D:|d:|)getlastmodified[^>]*>(.*?)<\/(?:D:|d:|)getlastmodified>/i);
+        const lastModifiedMatch = response.match(/<[^:>]*:?getlastmodified[^>]*>(.*?)<\/[^:>]*:?getlastmodified>/i);
         const lastModified = lastModifiedMatch ? decodeXml(lastModifiedMatch[1]) : "";
-  
-        // Skip if this is the current path itself
-        const decodedHref = decodeURIComponent(href).replace(/^\//, "");
-        const expectedCurrent = fullPrefix.replace(/^\//, "");
-        if (decodedHref === expectedCurrent || decodedHref === expectedCurrent + "/") {
-          continue;
-        }
-  
+
+        console.log('[WebDAV] Item:', {
+          href,
+          displayName,
+          resourceTypeMatch: resourceTypeMatch ? resourceTypeMatch[0] : null,
+          innerContent: resourceTypeMatch ? resourceTypeMatch[1] : null,
+          isDirectory,
+          size
+        });
+
         // Create a proper key path relative to the display prefix
         let key = displayName;
         if (displayPrefix && !isDirectory) {

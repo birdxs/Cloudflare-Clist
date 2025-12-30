@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS storages (
     bucket TEXT NOT NULL,
     base_path TEXT DEFAULT '',
     is_public INTEGER DEFAULT 0,
+    guest_list INTEGER DEFAULT 1,
+    guest_download INTEGER DEFAULT 1,
+    guest_upload INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
