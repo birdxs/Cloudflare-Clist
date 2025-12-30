@@ -1,7 +1,7 @@
 import type { Route } from "./+types/home";
 import { requireAuth } from "~/lib/auth";
 import { getAllStorages, getPublicStorages, initDatabase } from "~/lib/storage";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { FilePreview } from "~/components/FilePreview";
 import { getFileType, isPreviewable } from "~/lib/file-utils";
 
@@ -422,29 +422,101 @@ function StorageModal({
   );
 }
 
-function SettingsModal({ onClose, siteTitle }: { onClose: () => void; siteTitle: string }) {
+function SettingsModal({
+  onClose,
+  siteTitle,
+  siteAnnouncement,
+  isDark,
+  onToggleTheme
+}: {
+  onClose: () => void;
+  siteTitle: string;
+  siteAnnouncement: string;
+  isDark: boolean;
+  onToggleTheme: (e: React.MouseEvent) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<'general' | 'about'>('general');
+
   return (
     <div className="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 w-full max-w-md rounded-lg shadow-xl" onClick={e => e.stopPropagation()}>
         <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between">
-          <span className="text-zinc-900 dark:text-zinc-100 font-mono text-sm">关于</span>
+          <span className="text-zinc-900 dark:text-zinc-100 font-mono text-sm">设置</span>
           <button onClick={onClose} className="text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">×</button>
         </div>
-        <div className="p-4 space-y-4">
-          <div className="text-center py-4">
-            <div className="text-3xl font-bold text-zinc-900 dark:text-zinc-100 font-mono mb-1">{siteTitle}</div>
-            <div className="text-xs text-zinc-500 font-mono">v1.1.2</div>
-          </div>
-          <div className="text-xs text-zinc-600 dark:text-zinc-400 font-mono space-y-2">
-            <p>S3 兼容存储聚合服务</p>
-            <p className="text-zinc-500">支持: AWS S3 / Cloudflare R2 / 阿里云 OSS / 腾讯云 COS / MinIO 等</p>
-            <p>作者:ooyyh</p>
-            <p>联系方式:3266940347@qq.com</p>
-          </div>
-          <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4 text-xs text-zinc-500 font-mono">
-            <p>Powered by Cloudflare Workers && ooyyh</p>
-            
-          </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-zinc-200 dark:border-zinc-700">
+          <button
+            onClick={() => setActiveTab('general')}
+            className={`flex-1 px-4 py-2 text-xs font-mono transition ${
+              activeTab === 'general'
+                ? 'text-blue-500 border-b-2 border-blue-500'
+                : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+            }`}
+          >
+            常规
+          </button>
+          <button
+            onClick={() => setActiveTab('about')}
+            className={`flex-1 px-4 py-2 text-xs font-mono transition ${
+              activeTab === 'about'
+                ? 'text-blue-500 border-b-2 border-blue-500'
+                : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+            }`}
+          >
+            关于
+          </button>
+        </div>
+
+        <div className="p-4">
+          {activeTab === 'general' && (
+            <div className="space-y-4">
+              {/* Theme Setting */}
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <div className="text-sm text-zinc-900 dark:text-zinc-100 font-mono">主题模式</div>
+                  <div className="text-xs text-zinc-500">切换亮色或暗色主题</div>
+                </div>
+                <button
+                  onClick={onToggleTheme}
+                  className="px-3 py-1.5 text-xs font-mono rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition"
+                >
+                  {isDark ? '☀ 亮色' : '☾ 暗色'}
+                </button>
+              </div>
+
+              {/* Announcement */}
+              {siteAnnouncement && (
+                <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4">
+                  <div className="text-sm text-zinc-900 dark:text-zinc-100 font-mono mb-2 flex items-center gap-2">
+                    <span className="text-yellow-500">📢</span> 公告
+                  </div>
+                  <div className="text-xs text-zinc-600 dark:text-zinc-400 font-mono whitespace-pre-wrap bg-zinc-50 dark:bg-zinc-800 p-3 rounded border border-zinc-200 dark:border-zinc-700 max-h-32 overflow-y-auto">
+                    {siteAnnouncement}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'about' && (
+            <div className="space-y-4">
+              <div className="text-center py-4">
+                <div className="text-3xl font-bold text-zinc-900 dark:text-zinc-100 font-mono mb-1">{siteTitle}</div>
+                <div className="text-xs text-zinc-500 font-mono">v1.2.0</div>
+              </div>
+              <div className="text-xs text-zinc-600 dark:text-zinc-400 font-mono space-y-2">
+                <p>S3 兼容存储聚合服务</p>
+                <p className="text-zinc-500">支持: AWS S3 / Cloudflare R2 / 阿里云 OSS / 腾讯云 COS / MinIO / WebDAV 等</p>
+                <p>作者: ooyyh</p>
+                <p>联系方式: 3266940347@qq.com</p>
+              </div>
+              <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4 text-xs text-zinc-500 font-mono">
+                <p>Powered by Cloudflare Workers && ooyyh</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1644,7 +1716,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
   const [editingStorage, setEditingStorage] = useState<StorageInfo | null>(null);
   const [isDark, setIsDark] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const themeButtonRef = useRef<HTMLButtonElement>(null);
 
   const siteTitle = loaderData.siteTitle || "CList";
   const siteAnnouncement = loaderData.siteAnnouncement || "";
@@ -1765,20 +1836,19 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              ref={themeButtonRef}
               onClick={toggleTheme}
               className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 font-mono px-2 py-1 whitespace-nowrap"
             >
               {isDark ? "☀ 亮色" : "☾ 暗色"}
             </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 font-mono px-2 py-1 whitespace-nowrap"
+            >
+              ⚙ 设置
+            </button>
             {isAdmin ? (
               <>
-                <button
-                  onClick={() => setShowSettings(true)}
-                  className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 font-mono whitespace-nowrap"
-                >
-                  关于
-                </button>
                 <span className="text-xs text-green-600 dark:text-green-500 font-mono whitespace-nowrap">● 管理员</span>
                 <button
                   onClick={handleLogout}
@@ -1935,7 +2005,15 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           onCancel={() => { setShowStorageForm(false); setEditingStorage(null); }}
         />
       )}
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} siteTitle={siteTitle} />}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          siteTitle={siteTitle}
+          siteAnnouncement={siteAnnouncement}
+          isDark={isDark}
+          onToggleTheme={toggleTheme}
+        />
+      )}
       {showAnnouncement && siteAnnouncement && (
         <AnnouncementModal
           announcement={siteAnnouncement}
