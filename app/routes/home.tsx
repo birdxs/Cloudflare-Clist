@@ -40,12 +40,16 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     storages: storages.map((s) => ({
       id: s.id,
       name: s.name,
+      type: s.type,
       endpoint: s.endpoint,
       region: s.region,
       accessKeyId: s.accessKeyId,
       bucket: s.bucket,
       basePath: s.basePath,
       isPublic: s.isPublic,
+      guestList: s.guestList,
+      guestDownload: s.guestDownload,
+      guestUpload: s.guestUpload,
     })),
   };
 }
@@ -68,6 +72,9 @@ interface StorageInfo {
   bucket?: string;
   basePath?: string;
   isPublic: boolean;
+  guestList: boolean;
+  guestDownload: boolean;
+  guestUpload: boolean;
 }
 
 function formatBytes(bytes: number): string {
@@ -193,6 +200,9 @@ function StorageModal({
     bucket: storage?.bucket || "",
     basePath: storage?.basePath || "",
     isPublic: storage?.isPublic ?? false,
+    guestList: storage?.guestList ?? false,
+    guestDownload: storage?.guestDownload ?? false,
+    guestUpload: storage?.guestUpload ?? false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -338,12 +348,55 @@ function StorageModal({
                 <input
                   type="checkbox"
                   checked={formData.isPublic}
-                  onChange={(e) => setFormData({ ...formData, isPublic: e.target.checked })}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setFormData({
+                      ...formData,
+                      isPublic: checked,
+                      guestList: checked,
+                      guestDownload: checked,
+                    });
+                  }}
                   className="w-4 h-4 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded"
                 />
                 <span className="text-sm text-zinc-700 dark:text-zinc-300 font-mono">公开访问</span>
-                <span className="text-xs text-zinc-500">(允许游客浏览下载)</span>
+                <span className="text-xs text-zinc-500">(快速开启浏览和下载)</span>
               </label>
+            </div>
+            <div className="col-span-2 border-t border-zinc-200 dark:border-zinc-700 pt-3 mt-1">
+              <div className="text-xs text-zinc-500 mb-2 font-mono">游客权限设置</div>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.guestList}
+                    onChange={(e) => setFormData({ ...formData, guestList: e.target.checked })}
+                    className="w-4 h-4 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded"
+                  />
+                  <span className="text-sm text-zinc-700 dark:text-zinc-300 font-mono">允许浏览</span>
+                  <span className="text-xs text-zinc-500">(查看文件列表)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.guestDownload}
+                    onChange={(e) => setFormData({ ...formData, guestDownload: e.target.checked })}
+                    className="w-4 h-4 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded"
+                  />
+                  <span className="text-sm text-zinc-700 dark:text-zinc-300 font-mono">允许下载</span>
+                  <span className="text-xs text-zinc-500">(下载和预览文件)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.guestUpload}
+                    onChange={(e) => setFormData({ ...formData, guestUpload: e.target.checked })}
+                    className="w-4 h-4 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded"
+                  />
+                  <span className="text-sm text-zinc-700 dark:text-zinc-300 font-mono">允许上传</span>
+                  <span className="text-xs text-zinc-500">(上传新文件)</span>
+                </label>
+              </div>
             </div>
           </div>
           {error && <div className="text-red-500 dark:text-red-400 text-xs font-mono">{error}</div>}
@@ -427,6 +480,11 @@ function AnnouncementModal({ announcement, onClose }: { announcement: string; on
 }
 
 function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: StorageInfo; isAdmin: boolean; isDark: boolean; chunkSizeMB: number }) {
+  // Permission checks
+  const canList = isAdmin || storage.guestList;
+  const canDownload = isAdmin || storage.guestDownload;
+  const canUpload = isAdmin || storage.guestUpload;
+
   const [path, setPath] = useState("");
   const [objects, setObjects] = useState<S3Object[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1161,11 +1219,13 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
               >
                 离线下载
               </button>
-              <label className={`text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 font-mono cursor-pointer rounded ${uploadProgress ? 'opacity-50 pointer-events-none' : ''}`}>
-                {uploadProgress ? '上传中...' : '上传'}
-                <input type="file" multiple onChange={handleUpload} className="hidden" disabled={!!uploadProgress} />
-              </label>
             </>
+          )}
+          {canUpload && (
+            <label className={`text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 font-mono cursor-pointer rounded ${uploadProgress ? 'opacity-50 pointer-events-none' : ''}`}>
+              {uploadProgress ? '上传中...' : '上传'}
+              <input type="file" multiple onChange={handleUpload} className="hidden" disabled={!!uploadProgress} />
+            </label>
           )}
         </div>
       </div>
@@ -1417,7 +1477,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
                       )
                     ) : (
                       <div className="flex items-center justify-end gap-2">
-                        {isPreviewable(obj.name) && (
+                        {canDownload && isPreviewable(obj.name) && (
                           <button
                             onClick={() => handlePreview(obj)}
                             className="text-zinc-400 dark:text-zinc-500 hover:text-blue-500"
@@ -1426,13 +1486,15 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
                             ▶
                           </button>
                         )}
-                        <button
-                          onClick={() => downloadFile(obj.key)}
-                          className="text-zinc-400 dark:text-zinc-500 hover:text-blue-500"
-                          title="下载"
-                        >
-                          ↓
-                        </button>
+                        {canDownload && (
+                          <button
+                            onClick={() => downloadFile(obj.key)}
+                            className="text-zinc-400 dark:text-zinc-500 hover:text-blue-500"
+                            title="下载"
+                          >
+                            ↓
+                          </button>
+                        )}
                         {isAdmin && (
                           <>
                             <button

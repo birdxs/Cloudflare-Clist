@@ -18,12 +18,24 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 
   const { isAdmin } = await requireAuth(request, db);
 
-  if (!storage.isPublic && !isAdmin) {
-    return Response.json({ error: "Unauthorized" }, { status: 403 });
-  }
-
   const url = new URL(request.url);
   const action = url.searchParams.get("action");
+
+  // Permission checks based on action
+  const canList = isAdmin || storage.guestList;
+  const canDownload = isAdmin || storage.guestDownload;
+
+  // List objects - requires list permission
+  if (action === "list" || !action) {
+    if (!canList) {
+      return Response.json({ error: "没有浏览权限" }, { status: 403 });
+    }
+  } else {
+    // Download, signed-url, info - requires download permission
+    if (!canDownload) {
+      return Response.json({ error: "没有下载权限" }, { status: 403 });
+    }
+  }
 
   // Create appropriate client based on storage type
   type StorageClient = S3Client | WebdevClient;
@@ -124,17 +136,34 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   const db = context.cloudflare.env.DB;
   await initDatabase(db);
 
-  const { isAdmin } = await requireAuth(request, db, "admin");
-  if (!isAdmin) {
-    return Response.json({ error: "Unauthorized" }, { status: 403 });
-  }
-
   const storageId = parseInt(params.storageId || "0", 10);
   const path = params["*"] || "";
 
   const storage = await getStorageById(db, storageId);
   if (!storage) {
     return Response.json({ error: "Storage not found" }, { status: 404 });
+  }
+
+  const { isAdmin } = await requireAuth(request, db);
+
+  const method = request.method;
+  const url = new URL(request.url);
+  const action = url.searchParams.get("action");
+
+  // Permission check: upload operations can be done by guests with guestUpload permission
+  const canUpload = isAdmin || storage.guestUpload;
+  const uploadActions = ["multipart-init", "multipart-urls", "multipart-upload", "multipart-complete", "multipart-abort"];
+  const isUploadAction = uploadActions.includes(action || "") || (method === "PUT" && !action) || (method === "POST" && !action);
+
+  if (isUploadAction) {
+    if (!canUpload) {
+      return Response.json({ error: "没有上传权限" }, { status: 403 });
+    }
+  } else {
+    // All other actions (mkdir, rename, move, delete, fetch) require admin
+    if (!isAdmin) {
+      return Response.json({ error: "Unauthorized" }, { status: 403 });
+    }
   }
 
   // Create appropriate client based on storage type
@@ -158,10 +187,6 @@ export async function action({ request, params, context }: Route.ActionArgs) {
       basePath: storage.basePath,
     });
   }
-
-  const method = request.method;
-  const url = new URL(request.url);
-  const action = url.searchParams.get("action");
 
   // Initialize multipart upload
   if (method === "POST" && action === "multipart-init") {

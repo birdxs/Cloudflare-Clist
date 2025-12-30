@@ -90,91 +90,118 @@ export class WebdevClient {
     }
   }
 
-  private parsePropfindResponse(
-    xml: string,
-    fullPrefix: string,
-    displayPrefix: string
-  ): ListObjectsResult {
-    const objects: S3Object[] = [];
-    const prefixes: string[] = [];
-    const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
+    private parsePropfindResponse(
+      xml: string,
+      fullPrefix: string,
+      displayPrefix: string
+    ): ListObjectsResult {
+      const objects: S3Object[] = [];
+      const prefixes: string[] = [];
+      const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
 
-    const decodeXml = (str: string) => str
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'");
+      const decodeXml = (str: string) => str
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
 
-    // Parse response entries
-    const responseRegex = /<D:response>([\s\S]*?)<\/D:response>/g;
-    let match;
+      // Parse response entries - support various namespace prefixes (D:, d:, or none)
+      const responseRegex = /<(?:D:|d:|)response[^>]*>([\s\S]*?)<\/(?:D:|d:|)response>/gi;
+      let match;
 
-    while ((match = responseRegex.exec(xml)) !== null) {
-      const response = match[1];
+      while ((match = responseRegex.exec(xml)) !== null) {
+        const response = match[1];
 
-      // Skip the parent directory entry
-      const hrefMatch = response.match(/<D:href>(.*?)<\/D:href>/);
-      if (!hrefMatch) continue;
+        // Skip the parent directory entry - support various namespace prefixes
+        const hrefMatch = response.match(/<(?:D:|d:|)href[^>]*>(.*?)<\/(?:D:|d:|)href>/i);
+        if (!hrefMatch) continue;
 
-      const href = decodeXml(hrefMatch[1]);
-      const resourceTypeMatch = response.match(/<D:resourcetype>([\s\S]*?)<\/D:resourcetype>/);
-      const isDirectory = resourceTypeMatch && resourceTypeMatch[1].includes("collection");
-
-      const displayNameMatch = response.match(/<D:displayname>(.*?)<\/D:displayname>/);
-      const displayName = displayNameMatch ? decodeXml(displayNameMatch[1]) : "";
-
-      const contentLengthMatch = response.match(/<D:getcontentlength>(.*?)<\/D:getcontentlength>/);
-      const size = contentLengthMatch ? parseInt(contentLengthMatch[1], 10) : 0;
-
-      const lastModifiedMatch = response.match(/<D:getlastmodified>(.*?)<\/D:getlastmodified>/);
-      const lastModified = lastModifiedMatch ? decodeXml(lastModifiedMatch[1]) : "";
-
-      if (!displayName) continue;
-
-      // Skip if this is the current path itself
-      const decodedHref = decodeURIComponent(href).replace(/^\//, "");
-      const expectedCurrent = fullPrefix.replace(/^\//, "");
-      if (decodedHref === expectedCurrent || decodedHref === expectedCurrent + "/") {
-        continue;
-      }
-
-      const key = displayName;
-      const name = displayName;
-
-      if (isDirectory) {
-        prefixes.push(key);
-        objects.push({
-          key,
-          name,
-          size: 0,
-          lastModified,
-          isDirectory: true,
-        });
-      } else {
-        objects.push({
-          key,
-          name,
-          size,
-          lastModified,
-          isDirectory: false,
-        });
-      }
-    }
-
-    return {
-      objects: objects.sort((a, b) => {
-        if (a.isDirectory !== b.isDirectory) {
-          return a.isDirectory ? -1 : 1;
+        const href = decodeXml(hrefMatch[1]);
+        const resourceTypeMatch = response.match(/<(?:D:|d:|)resourcetype[^>]*>([\s\S]*?)<\/(?:D:|d:|)resourcetype>/i);
+        const isDirectory = resourceTypeMatch && resourceTypeMatch[1].toLowerCase().includes("collection");
+  
+        // Get display name, fallback to filename from href if not provided
+        let displayName = "";
+        const displayNameMatch = response.match(/<(?:D:|d:|)displayname[^>]*>(.*?)<\/(?:D:|d:|)displayname>/i);
+        if (displayNameMatch) {
+          displayName = decodeXml(displayNameMatch[1]);
         }
-        return a.name.localeCompare(b.name);
-      }),
-      prefixes,
-      isTruncated: false,
-      nextContinuationToken: undefined,
-    };
-  }
+  
+        // If no displayname provided, extract filename from href
+        if (!displayName) {
+          // Decode URL-encoded characters in href
+          let decodedHref = decodeURIComponent(href);
+          // Remove base path if present
+          if (basePath) {
+            const basePathRegex = new RegExp(`^/?(?:${basePath}/?)?`, 'i');
+            decodedHref = decodedHref.replace(basePathRegex, "");
+          } else {
+            decodedHref = decodedHref.replace(/^\//, "");
+          }
+          // Remove trailing slash for folders before extracting name
+          decodedHref = decodedHref.replace(/\/$/, "");
+          // Extract just the filename/foldername from the path
+          const pathParts = decodedHref.split("/");
+          displayName = pathParts[pathParts.length - 1];
+        }
+  
+        // Skip if no display name could be determined
+        if (!displayName) continue;
 
+        const contentLengthMatch = response.match(/<(?:D:|d:|)getcontentlength[^>]*>(.*?)<\/(?:D:|d:|)getcontentlength>/i);
+        const size = contentLengthMatch ? parseInt(contentLengthMatch[1], 10) : 0;
+
+        const lastModifiedMatch = response.match(/<(?:D:|d:|)getlastmodified[^>]*>(.*?)<\/(?:D:|d:|)getlastmodified>/i);
+        const lastModified = lastModifiedMatch ? decodeXml(lastModifiedMatch[1]) : "";
+  
+        // Skip if this is the current path itself
+        const decodedHref = decodeURIComponent(href).replace(/^\//, "");
+        const expectedCurrent = fullPrefix.replace(/^\//, "");
+        if (decodedHref === expectedCurrent || decodedHref === expectedCurrent + "/") {
+          continue;
+        }
+  
+        // Create a proper key path relative to the display prefix
+        let key = displayName;
+        if (displayPrefix && !isDirectory) {
+          key = displayPrefix + displayName;
+        } else if (displayPrefix && isDirectory) {
+          key = displayPrefix + displayName + "/";
+        }
+  
+        if (isDirectory) {
+          prefixes.push(displayName);
+          objects.push({
+            key,
+            name: displayName,
+            size: 0,
+            lastModified,
+            isDirectory: true,
+          });
+        } else {
+          objects.push({
+            key,
+            name: displayName,
+            size,
+            lastModified,
+            isDirectory: false,
+          });
+        }
+      }
+  
+      return {
+        objects: objects.sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) {
+            return a.isDirectory ? -1 : 1;
+          }
+          return a.name.localeCompare(b.name);
+        }),
+        prefixes,
+        isTruncated: false,
+        nextContinuationToken: undefined,
+      };
+    }
   async getObject(key: string): Promise<Response> {
     const fullKey = this.getFullPath(key);
     const endpoint = this.normalizeEndpoint(this.config.endpoint);

@@ -9,6 +9,9 @@ export interface Storage {
   bucket: string;
   basePath: string;
   isPublic: boolean;
+  guestList: boolean;
+  guestDownload: boolean;
+  guestUpload: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -23,6 +26,9 @@ export interface StorageInput {
   bucket: string;
   basePath?: string;
   isPublic?: boolean;
+  guestList?: boolean;
+  guestDownload?: boolean;
+  guestUpload?: boolean;
 }
 
 interface StorageRow {
@@ -36,6 +42,9 @@ interface StorageRow {
   bucket: string;
   base_path: string;
   is_public: number;
+  guest_list: number | null;
+  guest_download: number | null;
+  guest_upload: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +61,9 @@ function rowToStorage(row: StorageRow): Storage {
     bucket: row.bucket?.trim() || "",
     basePath: row.base_path?.trim() || "",
     isPublic: row.is_public === 1,
+    guestList: row.guest_list === 1 || (row.guest_list === null && row.is_public === 1),
+    guestDownload: row.guest_download === 1 || (row.guest_download === null && row.is_public === 1),
+    guestUpload: row.guest_upload === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -66,8 +78,9 @@ export async function getAllStorages(db: D1Database): Promise<Storage[]> {
 }
 
 export async function getPublicStorages(db: D1Database): Promise<Storage[]> {
+  // Show storages that have any guest permission enabled (list, download, or upload)
   const result = await db
-    .prepare("SELECT * FROM storages WHERE is_public = 1 ORDER BY name")
+    .prepare("SELECT * FROM storages WHERE guest_list = 1 OR guest_download = 1 OR guest_upload = 1 OR is_public = 1 ORDER BY name")
     .all<StorageRow>();
 
   return (result.results ?? []).map(rowToStorage);
@@ -110,11 +123,15 @@ export async function createStorage(
   const secretAccessKey = input.secretAccessKey.trim();
   const bucket = input.bucket.trim();
   const basePath = (input.basePath || "").trim();
+  const isPublic = input.isPublic ? 1 : 0;
+  const guestList = input.guestList !== undefined ? (input.guestList ? 1 : 0) : isPublic;
+  const guestDownload = input.guestDownload !== undefined ? (input.guestDownload ? 1 : 0) : isPublic;
+  const guestUpload = input.guestUpload ? 1 : 0;
 
   const result = await db
     .prepare(
-      `INSERT INTO storages (name, type, endpoint, region, access_key_id, secret_access_key, bucket, base_path, is_public)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO storages (name, type, endpoint, region, access_key_id, secret_access_key, bucket, base_path, is_public, guest_list, guest_download, guest_upload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING *`
     )
     .bind(
@@ -126,7 +143,10 @@ export async function createStorage(
       secretAccessKey,
       bucket,
       basePath,
-      input.isPublic ? 1 : 0
+      isPublic,
+      guestList,
+      guestDownload,
+      guestUpload
     )
     .first<StorageRow>();
 
@@ -186,6 +206,18 @@ export async function updateStorage(
   if (input.isPublic !== undefined) {
     updates.push("is_public = ?");
     values.push(input.isPublic ? 1 : 0);
+  }
+  if (input.guestList !== undefined) {
+    updates.push("guest_list = ?");
+    values.push(input.guestList ? 1 : 0);
+  }
+  if (input.guestDownload !== undefined) {
+    updates.push("guest_download = ?");
+    values.push(input.guestDownload ? 1 : 0);
+  }
+  if (input.guestUpload !== undefined) {
+    updates.push("guest_upload = ?");
+    values.push(input.guestUpload ? 1 : 0);
   }
 
   if (updates.length === 0) {

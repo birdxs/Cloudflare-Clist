@@ -40,7 +40,11 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     storages: storages.map((s) => ({
       id: s.id,
       name: s.name,
+      type: s.type,
       isPublic: s.isPublic,
+      guestList: s.guestList,
+      guestDownload: s.guestDownload,
+      guestUpload: s.guestUpload,
     })),
     isAdmin: false,
   });
