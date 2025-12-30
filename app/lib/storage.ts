@@ -1,6 +1,7 @@
 export interface Storage {
   id: number;
   name: string;
+  type: string;
   endpoint: string;
   region: string;
   accessKeyId: string;
@@ -14,6 +15,7 @@ export interface Storage {
 
 export interface StorageInput {
   name: string;
+  type?: string;
   endpoint: string;
   region?: string;
   accessKeyId: string;
@@ -26,6 +28,7 @@ export interface StorageInput {
 interface StorageRow {
   id: number;
   name: string;
+  type: string;
   endpoint: string;
   region: string;
   access_key_id: string;
@@ -41,6 +44,7 @@ function rowToStorage(row: StorageRow): Storage {
   return {
     id: row.id,
     name: row.name?.trim() || "",
+    type: row.type?.trim() || "s3",
     endpoint: row.endpoint?.trim() || "",
     region: row.region?.trim() || "",
     accessKeyId: row.access_key_id?.trim() || "",
@@ -99,6 +103,7 @@ export async function createStorage(
 ): Promise<Storage> {
   // Trim all string inputs to prevent signature mismatch errors
   const name = input.name.trim();
+  const type = (input.type || "s3").trim();
   const endpoint = input.endpoint.trim();
   const region = (input.region || "us-east-1").trim();
   const accessKeyId = input.accessKeyId.trim();
@@ -108,12 +113,13 @@ export async function createStorage(
 
   const result = await db
     .prepare(
-      `INSERT INTO storages (name, endpoint, region, access_key_id, secret_access_key, bucket, base_path, is_public)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO storages (name, type, endpoint, region, access_key_id, secret_access_key, bucket, base_path, is_public)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING *`
     )
     .bind(
       name,
+      type,
       endpoint,
       region,
       accessKeyId,
@@ -148,6 +154,10 @@ export async function updateStorage(
   if (input.name !== undefined) {
     updates.push("name = ?");
     values.push(input.name.trim());
+  }
+  if (input.type !== undefined) {
+    updates.push("type = ?");
+    values.push(input.type.trim());
   }
   if (input.endpoint !== undefined) {
     updates.push("endpoint = ?");

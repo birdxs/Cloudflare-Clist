@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS storages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL DEFAULT 's3',
     endpoint TEXT NOT NULL,
     region TEXT NOT NULL DEFAULT 'us-east-1',
     access_key_id TEXT NOT NULL,

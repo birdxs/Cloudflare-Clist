@@ -61,6 +61,7 @@ interface S3Object {
 interface StorageInfo {
   id: number;
   name: string;
+  type?: string;
   endpoint?: string;
   region?: string;
   accessKeyId?: string;
@@ -184,6 +185,7 @@ function StorageModal({
 }) {
   const [formData, setFormData] = useState({
     name: storage?.name || "",
+    type: storage?.type || "s3",
     endpoint: storage?.endpoint || "",
     region: storage?.region || "auto",
     accessKeyId: storage?.accessKeyId || "",
@@ -248,39 +250,59 @@ function StorageModal({
               />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs text-zinc-500 mb-1 font-mono">Endpoint *</label>
+              <label className="block text-xs text-zinc-500 mb-1 font-mono">存储类型 *</label>
+              <select
+                value={formData.type}
+                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
+                required
+              >
+                <option value="s3">S3 兼容服务</option>
+                <option value="webdev">WebDAV</option>
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs text-zinc-500 mb-1 font-mono">
+                {formData.type === "webdev" ? "WebDAV 服务器地址" : "Endpoint"} *
+              </label>
               <input
                 type="url"
                 value={formData.endpoint}
                 onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
                 className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
-                placeholder="https://s3.us-east-1.amazonaws.com"
+                placeholder={formData.type === "webdev" ? "https://example.com/webdav" : "https://s3.us-east-1.amazonaws.com"}
                 required
               />
             </div>
+            {formData.type === "s3" && (
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1 font-mono">Region</label>
+                <input
+                  type="text"
+                  value={formData.region}
+                  onChange={(e) => setFormData({ ...formData, region: e.target.value })}
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
+                  placeholder="auto"
+                />
+              </div>
+            )}
+            {formData.type === "s3" && (
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1 font-mono">Bucket *</label>
+                <input
+                  type="text"
+                  value={formData.bucket}
+                  onChange={(e) => setFormData({ ...formData, bucket: e.target.value })}
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
+                  placeholder="my-bucket"
+                  required={formData.type === "s3"}
+                />
+              </div>
+            )}
             <div>
-              <label className="block text-xs text-zinc-500 mb-1 font-mono">Region</label>
-              <input
-                type="text"
-                value={formData.region}
-                onChange={(e) => setFormData({ ...formData, region: e.target.value })}
-                className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
-                placeholder="auto"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-500 mb-1 font-mono">Bucket *</label>
-              <input
-                type="text"
-                value={formData.bucket}
-                onChange={(e) => setFormData({ ...formData, bucket: e.target.value })}
-                className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:border-blue-500 focus:outline-none rounded"
-                placeholder="my-bucket"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-500 mb-1 font-mono">Access Key *</label>
+              <label className="block text-xs text-zinc-500 mb-1 font-mono">
+                {formData.type === "webdev" ? "用户名" : "Access Key"} *
+              </label>
               <input
                 type="text"
                 value={formData.accessKeyId}
@@ -291,7 +313,7 @@ function StorageModal({
             </div>
             <div>
               <label className="block text-xs text-zinc-500 mb-1 font-mono">
-                Secret Key {storage && "(留空保持)"}
+                {formData.type === "webdev" ? "密码" : "Secret Key"} {storage && "(留空保持)"}
               </label>
               <input
                 type="password"

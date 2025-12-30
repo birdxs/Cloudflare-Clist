@@ -2,6 +2,7 @@ import type { Route } from "./+types/api.files.$storageId.$";
 import { getStorageById, initDatabase } from "~/lib/storage";
 import { requireAuth } from "~/lib/auth";
 import { S3Client } from "~/lib/s3-client";
+import { WebdevClient } from "~/lib/webdev-client";
 
 export async function loader({ request, params, context }: Route.LoaderArgs) {
   const db = context.cloudflare.env.DB;
@@ -24,19 +25,32 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const action = url.searchParams.get("action");
 
-  const s3Client = new S3Client({
-    endpoint: storage.endpoint,
-    region: storage.region,
-    accessKeyId: storage.accessKeyId,
-    secretAccessKey: storage.secretAccessKey,
-    bucket: storage.bucket,
-    basePath: storage.basePath,
-  });
+  // Create appropriate client based on storage type
+  type StorageClient = S3Client | WebdevClient;
+  let client: StorageClient;
+
+  if (storage.type === "webdev") {
+    client = new WebdevClient({
+      endpoint: storage.endpoint,
+      username: storage.accessKeyId,
+      password: storage.secretAccessKey,
+      basePath: storage.basePath,
+    });
+  } else {
+    client = new S3Client({
+      endpoint: storage.endpoint,
+      region: storage.region,
+      accessKeyId: storage.accessKeyId,
+      secretAccessKey: storage.secretAccessKey,
+      bucket: storage.bucket,
+      basePath: storage.basePath,
+    });
+  }
 
   // List objects
   if (action === "list" || !action) {
     try {
-      const result = await s3Client.listObjects(path);
+      const result = await client.listObjects(path);
       return Response.json({
         storage: { id: storage.id, name: storage.name },
         path,
@@ -53,7 +67,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
   // Download file
   if (action === "download") {
     try {
-      const response = await s3Client.getObject(path);
+      const response = await client.getObject(path);
       const contentType = response.headers.get("content-type") || "application/octet-stream";
       const contentLength = response.headers.get("content-length");
 
@@ -77,7 +91,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
   // Get signed URL
   if (action === "signed-url") {
     try {
-      const signedUrl = await s3Client.getSignedUrl(path);
+      const signedUrl = await client.getSignedUrl(path);
       return Response.json({ url: signedUrl });
     } catch (error) {
       return Response.json(
@@ -90,7 +104,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
   // Get file info (HEAD)
   if (action === "info") {
     try {
-      const info = await s3Client.headObject(path);
+      const info = await client.headObject(path);
       if (!info) {
         return Response.json({ error: "File not found" }, { status: 404 });
       }
@@ -123,14 +137,27 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     return Response.json({ error: "Storage not found" }, { status: 404 });
   }
 
-  const s3Client = new S3Client({
-    endpoint: storage.endpoint,
-    region: storage.region,
-    accessKeyId: storage.accessKeyId,
-    secretAccessKey: storage.secretAccessKey,
-    bucket: storage.bucket,
-    basePath: storage.basePath,
-  });
+  // Create appropriate client based on storage type
+  type StorageClient = S3Client | WebdevClient;
+  let client: StorageClient;
+
+  if (storage.type === "webdev") {
+    client = new WebdevClient({
+      endpoint: storage.endpoint,
+      username: storage.accessKeyId,
+      password: storage.secretAccessKey,
+      basePath: storage.basePath,
+    });
+  } else {
+    client = new S3Client({
+      endpoint: storage.endpoint,
+      region: storage.region,
+      accessKeyId: storage.accessKeyId,
+      secretAccessKey: storage.secretAccessKey,
+      bucket: storage.bucket,
+      basePath: storage.basePath,
+    });
+  }
 
   const method = request.method;
   const url = new URL(request.url);
@@ -141,7 +168,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     try {
       const body = await request.json() as { contentType?: string };
       const contentType = body.contentType || "application/octet-stream";
-      const uploadId = await s3Client.initiateMultipartUpload(path, contentType);
+      const uploadId = await client.initiateMultipartUpload(path, contentType);
       return Response.json({ uploadId });
     } catch (error) {
       return Response.json(
@@ -165,7 +192,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 
       const urls: Record<number, string> = {};
       for (const partNumber of body.partNumbers) {
-        urls[partNumber] = await s3Client.getSignedUploadPartUrl(path, body.uploadId, partNumber);
+        urls[partNumber] = await client.getSignedUploadPartUrl(path, body.uploadId, partNumber);
       }
 
       return Response.json({ urls });
@@ -192,7 +219,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 
     try {
       const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
-      const etag = await s3Client.uploadPart(path, uploadId, partNumber, request.body, contentLength);
+      const etag = await client.uploadPart(path, uploadId, partNumber, request.body, contentLength);
       return Response.json({ etag, partNumber });
     } catch (error) {
       return Response.json(
@@ -214,7 +241,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         return Response.json({ error: "uploadId and parts are required" }, { status: 400 });
       }
 
-      await s3Client.completeMultipartUpload(path, body.uploadId, body.parts);
+      await client.completeMultipartUpload(path, body.uploadId, body.parts);
       return Response.json({ success: true, path });
     } catch (error) {
       return Response.json(
@@ -233,7 +260,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         return Response.json({ error: "uploadId is required" }, { status: 400 });
       }
 
-      await s3Client.abortMultipartUpload(path, body.uploadId);
+      await client.abortMultipartUpload(path, body.uploadId);
       return Response.json({ success: true });
     } catch (error) {
       return Response.json(
@@ -246,7 +273,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   // Create folder
   if (method === "POST" && action === "mkdir") {
     try {
-      await s3Client.createFolder(path);
+      await client.createFolder(path);
       return Response.json({ success: true, path });
     } catch (error) {
       return Response.json(
@@ -280,7 +307,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
           let continuationToken: string | undefined;
 
           do {
-            const result = await s3Client.listObjects(prefix, "", 1000, continuationToken);
+            const result = await client.listObjects(prefix, "", 1000, continuationToken);
             for (const obj of result.objects) {
               keys.push(obj.key);
             }
@@ -297,17 +324,17 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         // Copy all objects to new location
         for (const key of keysToMove) {
           const newKey = newPrefix + key.substring(oldPrefix.length);
-          await s3Client.copyObject(key, newKey);
+          await client.copyObject(key, newKey);
         }
 
         // Delete old objects
         for (const key of keysToMove) {
-          await s3Client.deleteObject(key);
+          await client.deleteObject(key);
         }
 
         // Try to delete the old folder object
         try {
-          await s3Client.deleteObject(oldPrefix);
+          await client.deleteObject(oldPrefix);
         } catch {
           // Ignore if not exists
         }
@@ -315,8 +342,8 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         return Response.json({ success: true, newPath: newPrefix, moved: keysToMove.length });
       } else {
         // Rename single file
-        await s3Client.copyObject(path, newPath);
-        await s3Client.deleteObject(path);
+        await client.copyObject(path, newPath);
+        await client.deleteObject(path);
         return Response.json({ success: true, newPath });
       }
     } catch (error) {
@@ -354,7 +381,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
           let continuationToken: string | undefined;
 
           do {
-            const result = await s3Client.listObjects(prefix, "", 1000, continuationToken);
+            const result = await client.listObjects(prefix, "", 1000, continuationToken);
             for (const obj of result.objects) {
               keys.push(obj.key);
             }
@@ -371,17 +398,17 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         // Copy all objects to new location
         for (const key of keysToMove) {
           const newKey = newPrefix + key.substring(oldPrefix.length);
-          await s3Client.copyObject(key, newKey);
+          await client.copyObject(key, newKey);
         }
 
         // Delete old objects
         for (const key of keysToMove) {
-          await s3Client.deleteObject(key);
+          await client.deleteObject(key);
         }
 
         // Try to delete the old folder object
         try {
-          await s3Client.deleteObject(oldPrefix);
+          await client.deleteObject(oldPrefix);
         } catch {
           // Ignore if not exists
         }
@@ -389,8 +416,8 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         return Response.json({ success: true, newPath: newPrefix, moved: keysToMove.length });
       } else {
         // Move single file
-        await s3Client.copyObject(path, newPath);
-        await s3Client.deleteObject(path);
+        await client.copyObject(path, newPath);
+        await client.deleteObject(path);
         return Response.json({ success: true, newPath });
       }
     } catch (error) {
@@ -456,7 +483,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 
       // Upload to S3
       const uploadPath = path ? `${path}/${finalFilename}` : finalFilename;
-      await s3Client.putObject(uploadPath, bodyBuffer, contentType);
+      await client.putObject(uploadPath, bodyBuffer, contentType);
 
       return Response.json({
         success: true,
@@ -483,7 +510,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
       if (bodyBuffer.byteLength === 0) {
         return Response.json({ error: "No file body provided" }, { status: 400 });
       }
-      await s3Client.putObject(path, bodyBuffer, contentType);
+      await client.putObject(path, bodyBuffer, contentType);
       return Response.json({ success: true, path });
     } catch (error) {
       return Response.json(
@@ -504,7 +531,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
           let continuationToken: string | undefined;
 
           do {
-            const result = await s3Client.listObjects(prefix, "/", 1000, continuationToken);
+            const result = await client.listObjects(prefix, "/", 1000, continuationToken);
 
             // Add files
             for (const obj of result.objects) {
@@ -533,12 +560,12 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 
         // Delete all objects
         for (const key of keysToDelete) {
-          await s3Client.deleteObject(key);
+          await client.deleteObject(key);
         }
 
         // Also try to delete the folder object itself
         try {
-          await s3Client.deleteObject(path.endsWith("/") ? path : path + "/");
+          await client.deleteObject(path.endsWith("/") ? path : path + "/");
         } catch {
           // Folder object might not exist, ignore
         }
@@ -554,7 +581,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 
     // Single file deletion
     try {
-      await s3Client.deleteObject(path);
+      await client.deleteObject(path);
       return Response.json({ success: true });
     } catch (error) {
       return Response.json(
