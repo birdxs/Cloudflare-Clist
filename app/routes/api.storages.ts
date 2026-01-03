@@ -7,6 +7,9 @@ import {
   deleteStorage,
   getStorageById,
   initDatabase,
+  exportStoragesForBackup,
+  importStoragesFromBackup,
+  type BackupData,
 } from "~/lib/storage";
 import {
   requireAuth,
@@ -95,6 +98,52 @@ export async function action({ request, context }: Route.ActionArgs) {
           },
         }
       );
+    }
+
+    // Export backup (admin only)
+    if (actionType === "export-backup") {
+      const { isAdmin } = await requireAuth(request, db, "admin");
+      if (!isAdmin) {
+        return Response.json({ error: "Unauthorized" }, { status: 403 });
+      }
+
+      try {
+        const backup = await exportStoragesForBackup(db);
+        return Response.json({ backup });
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : "Failed to export backup" },
+          { status: 500 }
+        );
+      }
+    }
+
+    // Import backup (admin only)
+    if (actionType === "import-backup") {
+      const { isAdmin } = await requireAuth(request, db, "admin");
+      if (!isAdmin) {
+        return Response.json({ error: "Unauthorized" }, { status: 403 });
+      }
+
+      const { backup, mode } = body as { backup: BackupData; mode: 'merge' | 'replace' };
+
+      if (!backup || !backup.storages || !Array.isArray(backup.storages)) {
+        return Response.json({ error: "Invalid backup data" }, { status: 400 });
+      }
+
+      if (mode !== 'merge' && mode !== 'replace') {
+        return Response.json({ error: "Invalid import mode" }, { status: 400 });
+      }
+
+      try {
+        const result = await importStoragesFromBackup(db, backup, mode);
+        return Response.json({ success: true, ...result });
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : "Failed to import backup" },
+          { status: 500 }
+        );
+      }
     }
 
     // Create storage (admin only)

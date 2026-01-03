@@ -427,15 +427,99 @@ function SettingsModal({
   siteTitle,
   siteAnnouncement,
   isDark,
-  onToggleTheme
+  onToggleTheme,
+  isAdmin,
+  onRefreshStorages,
 }: {
   onClose: () => void;
   siteTitle: string;
   siteAnnouncement: string;
   isDark: boolean;
   onToggleTheme: (e: React.MouseEvent) => void;
+  isAdmin: boolean;
+  onRefreshStorages: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<'general' | 'about'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'backup' | 'about'>('general');
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [importResult, setImportResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleExportBackup = async () => {
+    setExporting(true);
+    try {
+      const res = await fetch("/api/storages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "export-backup" }),
+      });
+
+      if (res.ok) {
+        const data = await res.json() as { backup: unknown };
+        const blob = new Blob([JSON.stringify(data.backup, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `clist-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        const data = await res.json() as { error?: string };
+        alert(data.error || "导出失败");
+      }
+    } catch {
+      alert("网络错误");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleImportBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImporting(true);
+    setImportResult(null);
+
+    try {
+      const text = await file.text();
+      const backup = JSON.parse(text);
+
+      if (!backup.storages || !Array.isArray(backup.storages)) {
+        setImportResult({ success: false, message: "无效的备份文件格式" });
+        return;
+      }
+
+      const res = await fetch("/api/storages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "import-backup", backup, mode: importMode }),
+      });
+
+      const data = await res.json() as { success?: boolean; imported?: number; skipped?: number; errors?: string[]; error?: string };
+
+      if (res.ok && data.success) {
+        let message = `成功导入 ${data.imported} 个存储`;
+        if (data.skipped && data.skipped > 0) {
+          message += `，跳过 ${data.skipped} 个已存在的存储`;
+        }
+        if (data.errors && data.errors.length > 0) {
+          message += `\n\n错误:\n${data.errors.join("\n")}`;
+        }
+        setImportResult({ success: true, message });
+        onRefreshStorages();
+      } else {
+        setImportResult({ success: false, message: data.error || "导入失败" });
+      }
+    } catch (err) {
+      setImportResult({ success: false, message: err instanceof Error ? err.message : "解析备份文件失败" });
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -457,6 +541,18 @@ function SettingsModal({
           >
             常规
           </button>
+          {isAdmin && (
+            <button
+              onClick={() => setActiveTab('backup')}
+              className={`flex-1 px-4 py-2 text-xs font-mono transition ${
+                activeTab === 'backup'
+                  ? 'text-blue-500 border-b-2 border-blue-500'
+                  : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+              }`}
+            >
+              备份
+            </button>
+          )}
           <button
             onClick={() => setActiveTab('about')}
             className={`flex-1 px-4 py-2 text-xs font-mono transition ${
@@ -497,6 +593,94 @@ function SettingsModal({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'backup' && isAdmin && (
+            <div className="space-y-4">
+              {/* Export Section */}
+              <div>
+                <div className="text-sm text-zinc-900 dark:text-zinc-100 font-mono mb-2">导出备份</div>
+                <div className="text-xs text-zinc-500 mb-3">
+                  导出所有存储配置到 JSON 文件，包含连接凭证信息。
+                </div>
+                <button
+                  onClick={handleExportBackup}
+                  disabled={exporting}
+                  className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-500 text-white text-sm font-mono disabled:opacity-50 transition rounded"
+                >
+                  {exporting ? "导出中..." : "导出备份文件"}
+                </button>
+              </div>
+
+              {/* Import Section */}
+              <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4">
+                <div className="text-sm text-zinc-900 dark:text-zinc-100 font-mono mb-2">恢复备份</div>
+                <div className="text-xs text-zinc-500 mb-3">
+                  从备份文件恢复存储配置。
+                </div>
+
+                {/* Import Mode Selection */}
+                <div className="mb-3">
+                  <div className="text-xs text-zinc-500 mb-2 font-mono">导入模式:</div>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="importMode"
+                        value="merge"
+                        checked={importMode === 'merge'}
+                        onChange={() => setImportMode('merge')}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm text-zinc-700 dark:text-zinc-300 font-mono">合并</span>
+                      <span className="text-xs text-zinc-500">(保留现有)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="importMode"
+                        value="replace"
+                        checked={importMode === 'replace'}
+                        onChange={() => setImportMode('replace')}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm text-zinc-700 dark:text-zinc-300 font-mono">替换</span>
+                      <span className="text-xs text-zinc-500">(清空现有)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <label className={`block w-full py-2 px-4 text-center border-2 border-dashed border-zinc-300 dark:border-zinc-600 hover:border-blue-500 dark:hover:border-blue-500 text-sm font-mono cursor-pointer transition rounded ${importing ? 'opacity-50 pointer-events-none' : ''}`}>
+                  {importing ? "导入中..." : "选择备份文件"}
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={handleImportBackup}
+                    className="hidden"
+                    disabled={importing}
+                  />
+                </label>
+
+                {/* Import Result */}
+                {importResult && (
+                  <div className={`mt-3 p-3 rounded text-xs font-mono whitespace-pre-wrap ${
+                    importResult.success
+                      ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800'
+                      : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800'
+                  }`}>
+                    {importResult.message}
+                  </div>
+                )}
+              </div>
+
+              {/* Warning */}
+              <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4">
+                <div className="text-xs text-yellow-600 dark:text-yellow-500 font-mono flex items-start gap-2">
+                  <span>⚠</span>
+                  <span>备份文件包含敏感凭证信息，请妥善保管。</span>
+                </div>
+              </div>
             </div>
           )}
 
@@ -2012,6 +2196,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           siteAnnouncement={siteAnnouncement}
           isDark={isDark}
           onToggleTheme={toggleTheme}
+          isAdmin={isAdmin}
+          onRefreshStorages={refreshStorages}
         />
       )}
       {showAnnouncement && siteAnnouncement && (

@@ -254,3 +254,100 @@ export async function initDatabase(_db: D1Database): Promise<void> {
   // npx wrangler d1 execute clist --local --file=./schema.sql
   return;
 }
+
+// Backup types
+export interface StorageBackupItem {
+  name: string;
+  type: string;
+  endpoint: string;
+  region: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucket: string;
+  basePath: string;
+  isPublic: boolean;
+  guestList: boolean;
+  guestDownload: boolean;
+  guestUpload: boolean;
+}
+
+export interface BackupData {
+  version: number;
+  exportedAt: string;
+  storages: StorageBackupItem[];
+}
+
+// Export all storages for backup (includes secrets)
+export async function exportStoragesForBackup(db: D1Database): Promise<BackupData> {
+  const storages = await getAllStorages(db);
+
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    storages: storages.map((s) => ({
+      name: s.name,
+      type: s.type,
+      endpoint: s.endpoint,
+      region: s.region,
+      accessKeyId: s.accessKeyId,
+      secretAccessKey: s.secretAccessKey,
+      bucket: s.bucket,
+      basePath: s.basePath,
+      isPublic: s.isPublic,
+      guestList: s.guestList,
+      guestDownload: s.guestDownload,
+      guestUpload: s.guestUpload,
+    })),
+  };
+}
+
+// Import storages from backup
+export async function importStoragesFromBackup(
+  db: D1Database,
+  backup: BackupData,
+  mode: 'merge' | 'replace'
+): Promise<{ imported: number; skipped: number; errors: string[] }> {
+  const errors: string[] = [];
+  let imported = 0;
+  let skipped = 0;
+
+  if (mode === 'replace') {
+    // Delete all existing storages
+    await db.prepare("DELETE FROM storages").run();
+  }
+
+  for (const item of backup.storages) {
+    try {
+      // Check if storage with same name exists
+      const existing = await getStorageByName(db, item.name);
+
+      if (existing) {
+        if (mode === 'merge') {
+          // Skip existing in merge mode
+          skipped++;
+          continue;
+        }
+      }
+
+      await createStorage(db, {
+        name: item.name,
+        type: item.type,
+        endpoint: item.endpoint,
+        region: item.region,
+        accessKeyId: item.accessKeyId,
+        secretAccessKey: item.secretAccessKey,
+        bucket: item.bucket,
+        basePath: item.basePath,
+        isPublic: item.isPublic,
+        guestList: item.guestList,
+        guestDownload: item.guestDownload,
+        guestUpload: item.guestUpload,
+      });
+      imported++;
+    } catch (err) {
+      errors.push(`Failed to import "${item.name}": ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  return { imported, skipped, errors };
+}
