@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { getFileType, formatDuration, getCodeLanguage, type FileType } from "~/lib/file-utils";
+import hljs from "highlight.js";
+import { marked } from "marked";
 
 interface FilePreviewProps {
   storageId: number;
@@ -100,8 +102,14 @@ export function FilePreview({
           {fileType === "video" && <VideoPlayer url={fileUrl} />}
           {fileType === "audio" && <AudioPlayer url={fileUrl} fileName={fileName} />}
           {fileType === "image" && <ImageViewer url={fileUrl} fileName={fileName} />}
-          {(fileType === "text" || fileType === "code") && (
+          {fileType === "text" && (
             <TextViewer url={fileUrl} fileName={fileName} />
+          )}
+          {fileType === "code" && (
+            <CodeViewer url={fileUrl} fileName={fileName} />
+          )}
+          {fileType === "markdown" && (
+            <MarkdownViewer url={fileUrl} fileName={fileName} />
           )}
           {fileType === "pdf" && <PDFViewer url={fileUrl} />}
           {fileType === "unknown" && (
@@ -609,12 +617,11 @@ function ImageViewer({ url, fileName }: { url: string; fileName: string }) {
   );
 }
 
-// Text Viewer Component
+// Text Viewer Component (plain text without syntax highlighting)
 function TextViewer({ url, fileName }: { url: string; fileName: string }) {
   const [content, setContent] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
-  const language = getCodeLanguage(fileName);
 
   useEffect(() => {
     const fetchContent = async () => {
@@ -654,16 +661,430 @@ function TextViewer({ url, fileName }: { url: string; fileName: string }) {
     <div className="w-full max-w-5xl max-h-[calc(100vh-150px)] bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-zinc-800 border-b border-zinc-700">
-        <span className="text-zinc-400 text-xs font-mono">{language}</span>
+        <span className="text-zinc-400 text-xs font-mono">plaintext</span>
         <span className="text-zinc-500 text-xs font-mono">{content.split('\n').length} 行</span>
       </div>
 
       {/* Content */}
       <div className="overflow-auto max-h-[calc(100vh-200px)]">
         <pre className="p-4 text-sm font-mono text-zinc-300 whitespace-pre-wrap break-words">
-          <code>{content}</code>
+          {content}
         </pre>
       </div>
+    </div>
+  );
+}
+
+// Code Viewer Component (with syntax highlighting)
+function CodeViewer({ url, fileName }: { url: string; fileName: string }) {
+  const [content, setContent] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>("");
+  const [highlightedCode, setHighlightedCode] = useState<string>("");
+  const language = getCodeLanguage(fileName);
+
+  useEffect(() => {
+    const fetchContent = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Failed to fetch file");
+        const text = await res.text();
+        setContent(text);
+
+        // Apply syntax highlighting
+        try {
+          const result = hljs.highlight(text, { language, ignoreIllegals: true });
+          setHighlightedCode(result.value);
+        } catch {
+          // Fallback to auto-detection if language is not supported
+          const result = hljs.highlightAuto(text);
+          setHighlightedCode(result.value);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load file");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchContent();
+  }, [url, language]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center w-full h-64">
+        <span className="text-zinc-400 font-mono">加载中...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center w-full h-64">
+        <span className="text-red-400 font-mono">{error}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full max-w-5xl max-h-[calc(100vh-150px)] bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 bg-zinc-800 border-b border-zinc-700">
+        <span className="text-zinc-400 text-xs font-mono">{language}</span>
+        <span className="text-zinc-500 text-xs font-mono">{content.split('\n').length} 行</span>
+      </div>
+
+      {/* Content with syntax highlighting */}
+      <div className="overflow-auto max-h-[calc(100vh-200px)]">
+        <pre className="p-4 text-sm font-mono leading-relaxed">
+          <code
+            className={`hljs language-${language}`}
+            dangerouslySetInnerHTML={{ __html: highlightedCode }}
+          />
+        </pre>
+      </div>
+
+      {/* Highlight.js dark theme styles */}
+      <style>{`
+        .hljs {
+          color: #c9d1d9;
+          background: transparent;
+        }
+        .hljs-comment,
+        .hljs-quote {
+          color: #8b949e;
+          font-style: italic;
+        }
+        .hljs-keyword,
+        .hljs-selector-tag,
+        .hljs-type {
+          color: #ff7b72;
+        }
+        .hljs-literal,
+        .hljs-number,
+        .hljs-tag .hljs-attr,
+        .hljs-template-variable,
+        .hljs-variable {
+          color: #79c0ff;
+        }
+        .hljs-string,
+        .hljs-doctag,
+        .hljs-regexp {
+          color: #a5d6ff;
+        }
+        .hljs-title,
+        .hljs-title.class_,
+        .hljs-title.function_ {
+          color: #d2a8ff;
+        }
+        .hljs-params {
+          color: #c9d1d9;
+        }
+        .hljs-built_in {
+          color: #ffa657;
+        }
+        .hljs-symbol,
+        .hljs-bullet,
+        .hljs-link {
+          color: #7ee787;
+        }
+        .hljs-meta,
+        .hljs-meta .hljs-keyword {
+          color: #79c0ff;
+        }
+        .hljs-meta .hljs-string {
+          color: #a5d6ff;
+        }
+        .hljs-attr {
+          color: #79c0ff;
+        }
+        .hljs-attribute {
+          color: #7ee787;
+        }
+        .hljs-name {
+          color: #7ee787;
+        }
+        .hljs-section {
+          color: #d2a8ff;
+          font-weight: bold;
+        }
+        .hljs-selector-class,
+        .hljs-selector-id {
+          color: #7ee787;
+        }
+        .hljs-addition {
+          color: #aff5b4;
+          background-color: #033a16;
+        }
+        .hljs-deletion {
+          color: #ffdcd7;
+          background-color: #67060c;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Markdown Viewer Component
+function MarkdownViewer({ url, fileName }: { url: string; fileName: string }) {
+  const [content, setContent] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>("");
+  const [renderedHtml, setRenderedHtml] = useState<string>("");
+
+  useEffect(() => {
+    const fetchContent = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Failed to fetch file");
+        const text = await res.text();
+        setContent(text);
+
+        // Configure marked for code highlighting
+        marked.setOptions({
+          gfm: true,
+          breaks: true,
+        });
+
+        // Custom renderer for code blocks with syntax highlighting
+        const renderer = new marked.Renderer();
+        renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
+          if (lang && hljs.getLanguage(lang)) {
+            try {
+              const highlighted = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+              return `<pre class="hljs-code-block"><code class="hljs language-${lang}">${highlighted}</code></pre>`;
+            } catch {
+              // fallback
+            }
+          }
+          // Auto-detect or plain
+          const highlighted = hljs.highlightAuto(text).value;
+          return `<pre class="hljs-code-block"><code class="hljs">${highlighted}</code></pre>`;
+        };
+
+        const html = await marked(text, { renderer });
+        setRenderedHtml(html);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load file");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchContent();
+  }, [url]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center w-full h-64">
+        <span className="text-zinc-400 font-mono">加载中...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center w-full h-64">
+        <span className="text-red-400 font-mono">{error}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full max-w-4xl max-h-[calc(100vh-150px)] bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 bg-zinc-800 border-b border-zinc-700">
+        <span className="text-zinc-400 text-xs font-mono">Markdown</span>
+        <span className="text-zinc-500 text-xs font-mono">{fileName}</span>
+      </div>
+
+      {/* Rendered Markdown Content */}
+      <div className="overflow-auto max-h-[calc(100vh-200px)] p-6">
+        <div
+          className="markdown-body"
+          dangerouslySetInnerHTML={{ __html: renderedHtml }}
+        />
+      </div>
+
+      {/* Markdown styles */}
+      <style>{`
+        .markdown-body {
+          color: #c9d1d9;
+          font-size: 14px;
+          line-height: 1.7;
+        }
+        .markdown-body h1,
+        .markdown-body h2,
+        .markdown-body h3,
+        .markdown-body h4,
+        .markdown-body h5,
+        .markdown-body h6 {
+          color: #fff;
+          font-weight: 600;
+          margin-top: 24px;
+          margin-bottom: 16px;
+          line-height: 1.25;
+        }
+        .markdown-body h1 {
+          font-size: 2em;
+          padding-bottom: 0.3em;
+          border-bottom: 1px solid #3f3f46;
+        }
+        .markdown-body h2 {
+          font-size: 1.5em;
+          padding-bottom: 0.3em;
+          border-bottom: 1px solid #3f3f46;
+        }
+        .markdown-body h3 { font-size: 1.25em; }
+        .markdown-body h4 { font-size: 1em; }
+        .markdown-body h5 { font-size: 0.875em; }
+        .markdown-body h6 { font-size: 0.85em; color: #8b949e; }
+        .markdown-body p {
+          margin-top: 0;
+          margin-bottom: 16px;
+        }
+        .markdown-body a {
+          color: #58a6ff;
+          text-decoration: none;
+        }
+        .markdown-body a:hover {
+          text-decoration: underline;
+        }
+        .markdown-body strong {
+          color: #fff;
+          font-weight: 600;
+        }
+        .markdown-body em {
+          font-style: italic;
+        }
+        .markdown-body code {
+          background-color: rgba(110, 118, 129, 0.4);
+          padding: 0.2em 0.4em;
+          border-radius: 6px;
+          font-size: 85%;
+          font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        }
+        .markdown-body pre {
+          margin-top: 0;
+          margin-bottom: 16px;
+        }
+        .markdown-body .hljs-code-block {
+          background-color: #161b22;
+          border-radius: 6px;
+          padding: 16px;
+          overflow-x: auto;
+        }
+        .markdown-body .hljs-code-block code {
+          background: transparent;
+          padding: 0;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+        .markdown-body ul,
+        .markdown-body ol {
+          margin-top: 0;
+          margin-bottom: 16px;
+          padding-left: 2em;
+        }
+        .markdown-body li {
+          margin-top: 0.25em;
+        }
+        .markdown-body li + li {
+          margin-top: 0.25em;
+        }
+        .markdown-body blockquote {
+          margin: 0 0 16px 0;
+          padding: 0 1em;
+          color: #8b949e;
+          border-left: 0.25em solid #3f3f46;
+        }
+        .markdown-body hr {
+          height: 0.25em;
+          padding: 0;
+          margin: 24px 0;
+          background-color: #3f3f46;
+          border: 0;
+        }
+        .markdown-body table {
+          border-collapse: collapse;
+          margin-bottom: 16px;
+          width: 100%;
+        }
+        .markdown-body table th,
+        .markdown-body table td {
+          padding: 6px 13px;
+          border: 1px solid #3f3f46;
+        }
+        .markdown-body table th {
+          font-weight: 600;
+          background-color: #21262d;
+        }
+        .markdown-body table tr:nth-child(2n) {
+          background-color: #161b22;
+        }
+        .markdown-body img {
+          max-width: 100%;
+          border-radius: 6px;
+        }
+        /* Syntax highlighting */
+        .hljs {
+          color: #c9d1d9;
+          background: transparent;
+        }
+        .hljs-comment,
+        .hljs-quote {
+          color: #8b949e;
+          font-style: italic;
+        }
+        .hljs-keyword,
+        .hljs-selector-tag,
+        .hljs-type {
+          color: #ff7b72;
+        }
+        .hljs-literal,
+        .hljs-number,
+        .hljs-tag .hljs-attr,
+        .hljs-template-variable,
+        .hljs-variable {
+          color: #79c0ff;
+        }
+        .hljs-string,
+        .hljs-doctag,
+        .hljs-regexp {
+          color: #a5d6ff;
+        }
+        .hljs-title,
+        .hljs-title.class_,
+        .hljs-title.function_ {
+          color: #d2a8ff;
+        }
+        .hljs-params {
+          color: #c9d1d9;
+        }
+        .hljs-built_in {
+          color: #ffa657;
+        }
+        .hljs-symbol,
+        .hljs-bullet,
+        .hljs-link {
+          color: #7ee787;
+        }
+        .hljs-meta,
+        .hljs-meta .hljs-keyword {
+          color: #79c0ff;
+        }
+        .hljs-attr {
+          color: #79c0ff;
+        }
+        .hljs-attribute {
+          color: #7ee787;
+        }
+        .hljs-name {
+          color: #7ee787;
+        }
+      `}</style>
     </div>
   );
 }

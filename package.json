@@ -12,7 +12,9 @@
 		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b"
 	},
 	"dependencies": {
+		"highlight.js": "^11.11.1",
 		"isbot": "^5.1.31",
+		"marked": "^17.0.1",
 		"react": "^19.1.1",
 		"react-dom": "^19.1.1",
 		"react-router": "^7.10.0"

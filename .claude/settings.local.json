@@ -12,7 +12,8 @@
       "Bash(git -C \"D:\\\\Project\\\\WorkerProjects\\\\clist\" show --stat 86f9684)",
       "Bash(git -C \"D:\\\\Project\\\\WorkerProjects\\\\clist\" show --stat 7a480aa)",
       "Bash(npx wrangler:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

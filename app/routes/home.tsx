@@ -1411,6 +1411,7 @@ function FileBrowser({ storage, isAdmin, isDark, chunkSizeMB }: { storage: Stora
       case 'image': return '🖼️';
       case 'pdf': return '📕';
       case 'code': return '📝';
+      case 'markdown': return '📑';
       case 'text': return '📄';
       default: return '📄';
     }
