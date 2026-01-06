@@ -187,4 +187,5 @@ For support, please contact:
 This project is licensed under the terms specified in the repository.
 
 ## Star History
-![Star History](https://www.star-history.com/#ooyyh/Cloudflare-Clist&type=date&legend=top-left)
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ooyyh/Cloudflare-Clist&type=date&legend=top-left)](https://www.star-history.com/#ooyyh/Cloudflare-Clist&type=date&legend=top-left)
