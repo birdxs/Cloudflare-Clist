@@ -185,3 +185,6 @@ For support, please contact:
 ## License
 
 This project is licensed under the terms specified in the repository.
+
+## Star History
+![Star History](https://www.star-history.com/#ooyyh/Cloudflare-Clist&type=date&legend=top-left)
