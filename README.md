@@ -83,6 +83,10 @@ To run the application in development mode:
 ```bash
 npm run dev
 ```
+or
+```bash
+npx wrangler dev
+```
 
 This will start the development server with hot reloading.
 
