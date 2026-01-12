@@ -4,7 +4,7 @@
  */
 {
 	"schema": "node_modules/wrangler/config-schema.json",
-	"名称": "clist"
+	"名称": "clist",
 	"兼容日期": "2025-04-04",
 	"main": "./workers/app.ts",
 	"vars": {
@@ -12,19 +12,19 @@
 		"ADMIN_USERNAME": "管理员",
 		"ADMIN_PASSWORD": "changeme123",
 		"SITE_TITLE": "ooyyh小型数据中心",
-		"SITE_ANNOUNCEMENT": "欢迎使用 CList 存储聚合服务！如有问题请联系管理员。\n Github: https://github.com/ooyyh \n email:laowan345@gmail.com"
+		"SITE_ANNOUNCEMENT": "欢迎使用 CList 存储聚合服务！如有问题请联系管理员。\n Github: https://github.com/ooyyh \n email:laowan345@gmail.com",
 		"CHUNK_SIZE_MB": "10"
-	}
+	},
 	"可观察性": {
 		"启用": true
-	}
+	},
 	"d1_databases": [
 		{
-			"binding": "DB"
-			"database_name": "clist"
+			"binding": "DB",
+			"database_name": "clist",
 			"database_id": "6a254bc3-1b92-4f7c-99b7-f6de981bcef3"
 		}
-	]
+	],
 	"migrations_dir": "./migrations"
 	/**
 
