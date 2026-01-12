@@ -3,56 +3,61 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-	"schema": "node_modules/wrangler/config-schema.json",
-	"名称": "clist",
-	"兼容日期": "2025-04-04",
-	"main": "./workers/app.ts",
-	"vars": {
-		"VALUE_FROM_CLOUDFLARE": "来自Cloudflare的问候",
-		"ADMIN_USERNAME": "管理员",
-		"ADMIN_PASSWORD": "changeme123",
-		"SITE_TITLE": "ooyyh小型数据中心",
-		"SITE_ANNOUNCEMENT": "欢迎使用 CList 存储聚合服务！如有问题请联系管理员。\n Github: https://github.com/ooyyh \n email:laowan345@gmail.com",
-		"CHUNK_SIZE_MB": "10"
-	},
-	"可观察性": {
-		"启用": true
-	},
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "clist",
-			"database_id": "6a254bc3-1b92-4f7c-99b7-f6de981bcef3"
-		}
-	],
-	"migrations_dir": "./migrations",
-	/**
-	 * 智能放置
-	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
-	 */
-	// "放置": {  "模式": "智能" },
-	/**
-	 * 绑定
-	 * 绑定允许您的工作器与 Cloudflare 开发者平台上的资源进行交互，包括
-	 * 数据库、对象存储、AI推理、实时通信等。
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * 静态资产
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": {
-	// "directory": "./public/",
-	// "binding": "ASSETS"
-	// },
-	/**
-	 * 服务绑定（在多个工人之间进行通信）
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 */
-	// "services": [
-	//   {
-	//     "binding": "MY_SERVICE",
-	//     "service": "my-service"
-	//   }
-	// ]
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clist",
+  "compatibility_date": "2025-04-04",
+  "main": "./workers/app.ts",
+  
+  // 环境变量
+  "vars": {
+    "VALUE_FROM_CLOUDFLARE": "来自Cloudflare的问候",
+    "ADMIN_USERNAME": "管理员",
+    "ADMIN_PASSWORD": "changeme123",
+    "SITE_TITLE": "ooyyh小型数据中心",
+    "SITE_ANNOUNCEMENT": "欢迎使用 CList 存储聚合服务！如有问题请联系管理员。\n Github: https://github.com/ooyyh  \n email:laowan345@gmail.com",
+    "CHUNK_SIZE_MB": "10"
+  },
+  
+  // 可观测性设置
+  "observability": {
+    "enabled": true
+  },
+  
+  // D1 数据库配置
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "clist",
+      "database_id": "6a254bc3-1b92-4f7c-99b7-f6de981bcef3"
+    }
+  ],
+  
+  // D1 迁移目录
+  "migrations_dir": "./migrations",
+  
+  // 智能放置 (可选功能)
+  // 如需启用，取消下面的注释
+  /*
+  "placement": {
+    "mode": "smart"
+  },
+  */
+  
+  // 静态资产配置 (已注释，如需启用请取消注释)
+  /*
+  "assets": {
+    "directory": "./public/",
+    "binding": "ASSETS"
+  },
+  */
+  
+  // 服务绑定 (已注释，如需启用请取消注释)
+  /*
+  "services": [
+    {
+      "binding": "MY_SERVICE",
+      "service": "my-service"
+    }
+  ]
+  */
 }
