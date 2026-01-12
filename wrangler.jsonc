@@ -25,38 +25,34 @@
 			"database_id": "6a254bc3-1b92-4f7c-99b7-f6de981bcef3"
 		}
 	],
-	"migrations_dir": "./migrations"
+	"migrations_dir": "./migrations",
 	/**
-
 	 * 智能放置
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
-	 * /
-	// "放置": {  "模式": "智能" }
+	 */
+	// "放置": {  "模式": "智能" },
 	/**
-
 	 * 绑定
 	 * 绑定允许您的工作器与 Cloudflare 开发者平台上的资源进行交互，包括
 	 * 数据库、对象存储、AI推理、实时通信等。
 	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 * /
+	 */
 	/**
-
 	 * 静态资产
 	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 * /
+	 */
 	// "assets": {
-// "directory": "./public/",
-// "binding": "ASSETS"
-// }
+	// "directory": "./public/",
+	// "binding": "ASSETS"
+	// },
 	/**
-
 	 * 服务绑定（在多个工人之间进行通信）
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 * /
+	 */
 	// "services": [
-  {
-    "binding": "MY_SERVICE",
-    "service": "my-service"
-  }
-]
+	//   {
+	//     "binding": "MY_SERVICE",
+	//     "service": "my-service"
+	//   }
+	// ]
 }
